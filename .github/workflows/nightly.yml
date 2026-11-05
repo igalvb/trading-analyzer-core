@@ -1,0 +1,201 @@
+# Nightly pipeline. Decision F-76: dark pool -> Evaluative Index -> RS ranking ->
+# macro refresh -> daily automation -> Exit report, all after the US market close.
+#
+# STARTED BY THE CLOUDFLARE RELAY at 03:23 UTC every day (relay/telegram-relay.worker.mjs, timer `23 3 * * *`;
+# docs/RELAY_SCHEDULES_PLAN.md) = 23:23 / 22:23 New York, after the 16:00 close, so the New York date is the trading
+# day. GitHub's own schedule was removed 2026-10-29: it did not fire on 10-28 and fired 7 hours late on 10-29 (during
+# the next morning), and a late queued run could cancel a waiting /analyze. Manual runs: Actions > Nightly > Run.
+name: Nightly
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_checks:
+        description: 'Also run typecheck and the test suite first (about 2 extra minutes)'
+        type: boolean
+        default: false
+      user:
+        description: 'User id. owner = you (repo secrets, your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
+        type: string
+        default: owner
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ (inputs.user || 'owner') == 'owner' && 'sheet-report-writers' || format('sheet-report-writers-{0}', inputs.user) }}
+  cancel-in-progress: false
+
+env:
+  LONG_HISTORY: 'on'
+  TZ: America/New_York
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
+  SCRIPT_TIME_ZONE: America/New_York
+  RUN_USER: ${{ inputs.user || 'owner' }}
+  SECRET_PREFIX: ${{ (inputs.user || 'owner') != 'owner' && format('{0}_', inputs.user) || '' }}
+  PROFILE_SOURCE: sheet
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  nightly:
+    name: Nightly pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Record start time
+        run: |
+          echo "NIGHTLY_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+          echo "Heartbeat: started $(date -u '+%Y-%m-%d %H:%M:%S') UTC = $(date '+%Y-%m-%d %H:%M:%S %Z') New York"
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check out the long price history (docs/LONG_HISTORY_PLAN.md; a missing branch is skipped)
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: prices
+          path: long-history
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Typecheck (optional)
+        if: ${{ inputs.run_checks }}
+        working-directory: backend
+        run: npm run typecheck
+
+      - name: Run tests (optional)
+        if: ${{ inputs.run_checks }}
+        working-directory: backend
+        # The suite tests the code as the owner, whoever the run is for (GENERIC_PLAN P5).
+        env:
+          RUN_USER: owner
+          PROFILE_SOURCE: ''
+        run: npm test
+
+      - name: Read the user profile tab (other users only)
+        if: env.PROFILE_SOURCE == 'sheet'
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          TELEGRAM_CHAT_ID: ${{ secrets[format('{0}TELEGRAM_CHAT_ID', env.SECRET_PREFIX)] }}
+        run: |
+          mkdir -p out
+          npm run profile-fetch -- --out "$PWD/out/profile.json"
+          echo "PROFILE_FILE=$PWD/out/profile.json" >> "$GITHUB_ENV"
+
+      - name: Run nightly pipeline
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          FMP_API_KEY: ${{ secrets[format('{0}FMP_API_KEY', env.SECRET_PREFIX)] }}
+          ALPHAVANTAGE_KEY: ${{ secrets[format('{0}ALPHAVANTAGE_KEY', env.SECRET_PREFIX)] }}
+          FINNHUB_KEY: ${{ secrets[format('{0}FINNHUB_KEY', env.SECRET_PREFIX)] }}
+          SEC_CONTACT_EMAIL: ${{ secrets[format('{0}SEC_CONTACT_EMAIL', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          TELEGRAM_CHAT_ID: ${{ secrets[format('{0}TELEGRAM_CHAT_ID', env.SECRET_PREFIX)] }}
+          # Row 38: the digest's "GitHub minutes this month" line reads this repo's runs (actions: read above).
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p out
+          export RUN_LOG_FILE="$PWD/out/nightly.log"  # the full log, every level (core/logFile.ts)
+          npm run nightly 2>&1 | tee out/nightly.console.log
+
+      - name: Re-lock sheet tabs (always)
+        if: always()
+        timeout-minutes: 5
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+        run: npm run lock-sheets
+
+      - name: Check the log for leaked keys
+        if: always()
+        working-directory: backend
+        env:
+          FMP_API_KEY: ${{ secrets[format('{0}FMP_API_KEY', env.SECRET_PREFIX)] }}
+          ALPHAVANTAGE_KEY: ${{ secrets[format('{0}ALPHAVANTAGE_KEY', env.SECRET_PREFIX)] }}
+          FINNHUB_KEY: ${{ secrets[format('{0}FINNHUB_KEY', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+        run: |
+          # Artifacts are NOT masked like the live log is, so check the file itself.
+          ls out/nightly*.log >/dev/null 2>&1 || exit 0
+          leaked=0
+          for name in FMP_API_KEY ALPHAVANTAGE_KEY FINNHUB_KEY TELEGRAM_BOT_TOKEN; do
+            value="${!name}"
+            if [ "${#value}" -ge 8 ] && grep -qF -- "$value" out/nightly*.log; then
+              echo "::error::The value of $name appears in the run log."
+              leaked=1
+            fi
+          done
+          if grep -q 'PRIVATE KEY-----' out/nightly*.log; then
+            echo "::error::A private key block appears in the run log."
+            leaked=1
+          fi
+          if [ "$leaked" = 1 ]; then
+            rm -f out/nightly*.log
+            echo "The log file was deleted so it is not uploaded."
+            exit 1
+          fi
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-log-${{ github.run_id }}
+          path: backend/out/nightly*.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Failure notice
+        if: failure() || cancelled()
+        run: |
+          # docs/LOGGING_SPEC.md: the counts come from the full run log (every level; RUN_LOG_FILE).
+          full=backend/out/nightly.log
+          count() { if [ -f "$full" ]; then grep -cE "^[^ ]+ $1( |$)" "$full" || true; else echo "unknown"; fi; }
+          echo "::error::Run log: $(count CRITICAL) CRITICAL, $(count ERROR) ERROR, $(count WARNING) WARNING line(s) (the full log is the nightly.log file of the artifact)."
+          echo "- Log lines: $(count CRITICAL) critical, $(count ERROR) error, $(count WARNING) warning" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::Nightly run did not finish cleanly. Open the run page and download the nightly-log artifact."
+          {
+            echo "### Nightly run FAILED"
+            echo "GitHub emails the repository owner for failed runs. Download the nightly-log artifact for details."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run summary
+        if: always()
+        run: |
+          # docs/LOGGING_SPEC.md: the counts come from the full run log (every level; RUN_LOG_FILE).
+          full=backend/out/nightly.log
+          count() { if [ -f "$full" ]; then grep -cE "^[^ ]+ $1( |$)" "$full" || true; else echo "unknown"; fi; }
+          end=$(date +%s)
+          mins=$(( (end - ${NIGHTLY_START_EPOCH:-$end}) / 60 ))
+          {
+            echo "### Nightly run"
+            echo "- Result: ${{ job.status }}"
+            echo "- Duration: about ${mins} minute(s)"
+            echo "- Log lines: $(count CRITICAL) critical, $(count ERROR) error, $(count WARNING) warning"
+            echo "- Finished (New York): $(date '+%Y-%m-%d %H:%M %Z')"
+          } >> "$GITHUB_STEP_SUMMARY"

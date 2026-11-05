@@ -1,0 +1,76 @@
+# Fetch files the owner keeps in Google Drive (for example the trading books for the new models) into the private
+# repo, on their own branch `files` (never main). The owner makes the Drive folder or file viewable by link and pastes
+# the link; this downloads it (a folder, a single file or a zip, which is unpacked) and commits it under files/.
+# Manual only. Files over 95 MB are split into parts (GitHub's limit is 100 MB per file).
+name: Fetch Files
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Google Drive link (folder, file or zip), shared as "Anyone with the link"'
+        type: string
+        required: true
+      folder:
+        description: 'Folder name under files/ (for example books)'
+        type: string
+        default: 'books'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fetch-files
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fetch-files:
+    name: Download and commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download from Google Drive
+        env:
+          URL: ${{ inputs.url }}
+          FOLDER: ${{ inputs.folder }}
+        run: |
+          set -euo pipefail
+          pip install --quiet gdown
+          dest="$RUNNER_TEMP/dl"; mkdir -p "$dest"
+          if [[ "$URL" == *"/folders/"* ]]; then
+            gdown --folder -O "$dest" "$URL"
+          else
+            (cd "$dest" && gdown --fuzzy "$URL")
+          fi
+          # unpack zips
+          find "$dest" -iname '*.zip' -print0 | while IFS= read -r -d '' z; do unzip -o -q "$z" -d "${z%.*}" && rm -f "$z"; done
+          safe=$(echo "$FOLDER" | tr -cd 'A-Za-z0-9._-'); safe=${safe:-books}
+          echo "SAFE=$safe" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/out/files/$safe"
+          cp -r "$dest"/. "$RUNNER_TEMP/out/files/$safe/"
+          # split anything over 95 MB
+          find "$RUNNER_TEMP/out" -type f -size +95M -print0 | while IFS= read -r -d '' f; do split -b 95m -d "$f" "$f.part-" && rm -f "$f"; done
+          echo "Files:"; (cd "$RUNNER_TEMP/out" && find . -type f | sort | sed 's/^/  /'); du -sh "$RUNNER_TEMP/out"
+
+      - name: Commit to the files branch
+        run: |
+          set -euo pipefail
+          git config user.name "fetch-files"
+          git config user.email "fetch-files@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin files >/dev/null; then
+            git fetch -q origin files && git checkout -q files
+          else
+            git checkout -q --orphan files && git rm -rq --cached . && find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          fi
+          cp -r "$RUNNER_TEMP/out/files" .
+          git add files
+          git commit -q -m "Files from Google Drive into files/$SAFE" || { echo "Nothing new."; exit 0; }
+          git push -q origin files
+          echo "Committed to branch files, folder files/$SAFE"

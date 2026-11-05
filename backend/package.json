@@ -1,0 +1,53 @@
+{
+  "name": "stock-analyzer-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Node.js backend for the Buy/Exit stock analysis system. Implements docs/BIG_PLAN_V13_NODE_BACKEND_BUY_EXIT_SYSTEM.md.",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit",
+    "test": "node --test --env-file-if-exists=.env --import ./test/testProfileEnv.ts",
+    "lint": "tsc --noEmit",
+    "smoke": "node --env-file-if-exists=.env src/smoke.ts",
+    "oracle:freeze": "node scripts/freezeOracle.ts",
+    "nightly": "node --env-file-if-exists=.env src/nightly.ts",
+    "ai": "node --env-file-if-exists=.env src/ai.ts",
+    "ticker": "node --env-file-if-exists=.env src/ticker.ts",
+    "analyze": "TZ=America/New_York node --env-file-if-exists=.env src/cli.ts analyze",
+    "verify": "node --env-file-if-exists=.env src/verifyCli.ts",
+    "record": "node --env-file-if-exists=.env src/record.ts",
+    "my-options": "node --env-file-if-exists=.env src/myOptions.ts",
+    "backtest": "TZ=America/New_York node src/backtestCli.ts",
+    "trim-price-tabs": "node --env-file-if-exists=.env src/trimPriceTabs.ts",
+    "cleanup-report-tabs": "node --env-file-if-exists=.env src/cleanupReportTabs.ts",
+    "trim-macro-tabs": "node --env-file-if-exists=.env src/trimPriceTabs.ts --macro",
+    "audit-script-properties": "node --env-file-if-exists=.env src/scriptPropertiesAudit.ts",
+    "telegram-check": "node src/telegramCheck.ts",
+    "setup-check": "node src/setupCheck.ts",
+    "init-user-sheets": "node src/initUserSheets.ts",
+    "telegram-setup": "node src/telegramSetup.ts",
+    "analyze-report": "TZ=America/New_York node --env-file-if-exists=.env src/analyzeReport.ts",
+    "exit-report-pdf": "TZ=America/New_York node --env-file-if-exists=.env src/exitReportPdf.ts",
+    "send-exit": "TZ=America/New_York node --env-file-if-exists=.env src/sendExit.ts",
+    "lock-sheets": "node --env-file-if-exists=.env src/lockSheets.ts",
+    "profile-fetch": "node --env-file-if-exists=.env src/profileFetch.ts",
+    "migrate-data-tabs": "node --env-file-if-exists=.env src/migrateDataTabs.ts",
+    "long-history": "node src/longHistory.ts",
+    "unlock-sheets": "node --env-file-if-exists=.env src/lockSheets.ts --unlock",
+    "live-fee-report": "TZ=America/New_York node --env-file-if-exists=.env src/live/feeReportCli.ts",
+    "watchdog": "node --env-file-if-exists=.env src/watchdog.ts",
+    "ops-verify": "node --env-file-if-exists=.env src/verify.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "googleapis": "^180.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.4",
+    "typescript": "^7.0.2"
+  }
+}

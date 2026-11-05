@@ -1,0 +1,205 @@
+# "Run AI Analysis" (replaces the old dialog). Manual only.
+# Booleans are passed to the program as plain text in environment variables and read in
+# one place in TypeScript. No step here is switched on or off by an AI checkbox, so an
+# unticked Opus box can never run Opus by accident.
+name: AI Dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      buy:
+        description: 'Add AI narrative to the Buy report'
+        type: boolean
+        default: false
+      buy_gemini:
+        description: 'Buy report: use Gemini'
+        type: boolean
+        default: true
+      buy_opus:
+        description: 'Buy report: use Claude Opus'
+        type: boolean
+        default: false
+      exit:
+        description: 'Add AI narrative to the Exit report'
+        type: boolean
+        default: false
+      exit_gemini:
+        description: 'Exit report: use Gemini'
+        type: boolean
+        default: true
+      exit_opus:
+        description: 'Exit report: use Claude Opus (also one portfolio-wide Opus view at the top, sent to Telegram)'
+        type: boolean
+        default: false
+      effort:
+        description: 'Opus effort for the whole run (higher costs more)'
+        type: choice
+        options:
+          - low
+          - medium
+          - high
+        default: medium
+      user:
+        description: 'User id. owner = you (repo secrets, your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
+        type: string
+        default: owner
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ (inputs.user || 'owner') == 'owner' && 'sheet-report-writers' || format('sheet-report-writers-{0}', inputs.user) }}
+  cancel-in-progress: false
+
+env:
+  LONG_HISTORY: 'on'
+  TZ: America/New_York
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
+  SCRIPT_TIME_ZONE: America/New_York
+  RUN_USER: ${{ inputs.user || 'owner' }}
+  SECRET_PREFIX: ${{ (inputs.user || 'owner') != 'owner' && format('{0}_', inputs.user) || '' }}
+  PROFILE_SOURCE: sheet
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ai:
+    name: AI analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BUY: ${{ inputs.buy }}
+      BUY_GEMINI: ${{ inputs.buy_gemini }}
+      BUY_OPUS: ${{ inputs.buy_opus }}
+      EXIT: ${{ inputs.exit }}
+      EXIT_GEMINI: ${{ inputs.exit_gemini }}
+      EXIT_OPUS: ${{ inputs.exit_opus }}
+      EFFORT: ${{ inputs.effort }}
+    steps:
+      - name: Refuse a run that would do nothing
+        run: |
+          if [ "$BUY" != "true" ] && [ "$EXIT" != "true" ]; then
+            echo "::error::Nothing selected. Tick Buy and/or Exit, then run again."
+            exit 1
+          fi
+          if [ "$BUY" = "true" ] && [ "$BUY_GEMINI" != "true" ] && [ "$BUY_OPUS" != "true" ]; then
+            echo "::warning::Buy is ticked but neither Gemini nor Opus is, so no narrative will be added to the Buy report."
+          fi
+          if [ "$EXIT" = "true" ] && [ "$EXIT_GEMINI" != "true" ] && [ "$EXIT_OPUS" != "true" ]; then
+            echo "::warning::Exit is ticked but neither Gemini nor Opus is, so no narrative will be added to the Exit report."
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check out the long price history (docs/LONG_HISTORY_PLAN.md; a missing branch is skipped)
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: prices
+          path: long-history
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Read the user profile tab (other users only)
+        if: env.PROFILE_SOURCE == 'sheet'
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          TELEGRAM_CHAT_ID: ${{ secrets[format('{0}TELEGRAM_CHAT_ID', env.SECRET_PREFIX)] }}
+        run: |
+          mkdir -p out
+          npm run profile-fetch -- --out "$PWD/out/profile.json"
+          echo "PROFILE_FILE=$PWD/out/profile.json" >> "$GITHUB_ENV"
+
+      - name: Run AI analysis
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          GEMINI_API_KEY: ${{ secrets[format('{0}GEMINI_API_KEY', env.SECRET_PREFIX)] }}
+          ANTHROPIC_API_KEY: ${{ secrets[format('{0}ANTHROPIC_API_KEY', env.SECRET_PREFIX)] }}
+          FMP_API_KEY: ${{ secrets[format('{0}FMP_API_KEY', env.SECRET_PREFIX)] }}
+          ALPHAVANTAGE_KEY: ${{ secrets[format('{0}ALPHAVANTAGE_KEY', env.SECRET_PREFIX)] }}
+          FINNHUB_KEY: ${{ secrets[format('{0}FINNHUB_KEY', env.SECRET_PREFIX)] }}
+          SEC_CONTACT_EMAIL: ${{ secrets[format('{0}SEC_CONTACT_EMAIL', env.SECRET_PREFIX)] }}
+          # Plan #47: the portfolio-wide Opus view (Exit Opus box) is also sent as one Telegram message.
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          TELEGRAM_CHAT_ID: ${{ secrets[format('{0}TELEGRAM_CHAT_ID', env.SECRET_PREFIX)] }}
+        run: |
+          mkdir -p out
+          export RUN_LOG_FILE="$PWD/out/ai.log"  # the full log, every level (core/logFile.ts)
+          npm run ai 2>&1 | tee out/ai.console.log
+
+      - name: Re-lock sheet tabs (always)
+        if: always()
+        timeout-minutes: 5
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+        run: npm run lock-sheets
+
+      - name: Check the log for leaked keys
+        if: always()
+        working-directory: backend
+        env:
+          GEMINI_API_KEY: ${{ secrets[format('{0}GEMINI_API_KEY', env.SECRET_PREFIX)] }}
+          ANTHROPIC_API_KEY: ${{ secrets[format('{0}ANTHROPIC_API_KEY', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+        run: |
+          ls out/ai*.log >/dev/null 2>&1 || exit 0
+          leaked=0
+          for name in GEMINI_API_KEY ANTHROPIC_API_KEY TELEGRAM_BOT_TOKEN; do
+            value="${!name}"
+            if [ "${#value}" -ge 8 ] && grep -qF -- "$value" out/ai*.log; then
+              echo "::error::The value of $name appears in the run log."
+              leaked=1
+            fi
+          done
+          if grep -q 'PRIVATE KEY-----' out/ai*.log; then
+            echo "::error::A private key block appears in the run log."
+            leaked=1
+          fi
+          if [ "$leaked" = 1 ]; then
+            rm -f out/ai*.log
+            exit 1
+          fi
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-log-${{ github.run_id }}
+          path: backend/out/ai*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Failure notice
+        if: failure() || cancelled()
+        run: |
+          # docs/LOGGING_SPEC.md: the counts come from the full run log (every level; RUN_LOG_FILE).
+          full=backend/out/ai.log
+          count() { if [ -f "$full" ]; then grep -cE "^[^ ]+ $1( |$)" "$full" || true; else echo "unknown"; fi; }
+          echo "::error::Run log: $(count CRITICAL) CRITICAL, $(count ERROR) ERROR, $(count WARNING) WARNING line(s) (the full log is the ai.log file of the artifact)."
+          echo "- Log lines: $(count CRITICAL) critical, $(count ERROR) error, $(count WARNING) warning" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::AI run did not finish cleanly. Download the ai-log artifact."
+          echo "### AI run FAILED" >> "$GITHUB_STEP_SUMMARY"

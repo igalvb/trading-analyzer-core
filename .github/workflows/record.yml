@@ -1,0 +1,151 @@
+# Record real data for replay tests (backlog recordings R-A1, R-N1, R-AI1). Manual only.
+# Runs in memory mode: the Google Sheet is never opened or written, so it needs no Sheet
+# keys; only `ai` calls AI (Gemini, low effort). The recording (keys removed) and the run log are
+# kept as a downloadable artifact for 30 days; nothing is committed by this workflow.
+name: Record
+
+on:
+  workflow_dispatch:
+    inputs:
+      what:
+        description: 'analyze = one ticker (R-A1); nightly = the nightly pipeline in memory (R-N1); ai = the AI run, Gemini only (R-AI1); prices = 2007-today daily prices of the research stocks (ticker ignored)'
+        type: choice
+        options:
+          - analyze
+          - nightly
+          - ai
+          - prices
+      ticker:
+        description: 'Ticker to analyse (analyze, ai) or to put on the in-memory watchlist (nightly)'
+        type: string
+        default: TSLA
+
+# write: ONLY to push the checked recording to the separate `recordings` branch (never main), so a
+# session can fetch it with git (artifact downloads are not reachable from every session).
+permissions:
+  contents: write
+
+concurrency:
+  group: record
+  cancel-in-progress: false
+
+env:
+  TZ: America/New_York
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
+  SCRIPT_TIME_ZONE: America/New_York
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  record:
+    name: Record one live run
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Record
+        working-directory: backend
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          ALPHAVANTAGE_KEY: ${{ secrets.ALPHAVANTAGE_KEY }}
+          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          WHAT: ${{ inputs.what }}
+          TICKER: ${{ inputs.ticker }}
+        run: |
+          mkdir -p out
+          if ! [[ "$TICKER" =~ ^[A-Za-z0-9.^-]{1,12}$ ]]; then
+            echo "::error::Ticker must be letters, digits, dot, caret or dash."
+            exit 2
+          fi
+          case "$WHAT" in
+            analyze|nightly|ai) npm run record -- "$WHAT" "$TICKER" 2>&1 | tee out/record.log ;;
+            prices) npm run record -- prices 2>&1 | tee out/record.log ;;
+            *) echo "::error::Unknown choice."; exit 2 ;;
+          esac
+          exit "${PIPESTATUS[0]}"
+
+      - name: Check the files for leaked keys
+        if: always()
+        working-directory: backend
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          ALPHAVANTAGE_KEY: ${{ secrets.ALPHAVANTAGE_KEY }}
+          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          # Artifacts are NOT masked like the live log is, so check the files themselves.
+          shopt -s nullglob
+          files=(out/record.log out/v13-recording-*.json)
+          [ "${#files[@]}" -gt 0 ] || exit 0
+          leaked=0
+          for f in "${files[@]}"; do
+            [ -f "$f" ] || continue
+            for name in FMP_API_KEY ALPHAVANTAGE_KEY FINNHUB_KEY GEMINI_API_KEY; do
+              value="${!name}"
+              if [ "${#value}" -ge 8 ] && grep -qF -- "$value" "$f"; then
+                echo "::error::The value of $name appears in $f."
+                leaked=1
+              fi
+            done
+          done
+          if [ "$leaked" = 1 ]; then
+            rm -f out/record.log out/v13-recording-*.json
+            echo "The files were deleted so they are not uploaded."
+            exit 1
+          fi
+
+      - name: Save the recording to the recordings branch
+        if: success()
+        run: |
+          shopt -s nullglob
+          files=(backend/out/v13-recording-*.json)
+          [ "${#files[@]}" -gt 0 ] || { echo "No recording to save."; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch -q --depth 1 origin recordings; then
+            git worktree add -q ../rec FETCH_HEAD
+            git -C ../rec checkout -q -b recordings
+          else
+            git worktree add -q --detach ../rec
+            git -C ../rec checkout -q --orphan recordings
+            git -C ../rec rm -rfq .
+          fi
+          for f in "${files[@]}"; do gzip -9c "$f" > "../rec/$(basename "$f").gz"; done
+          git -C ../rec add -- '*.json.gz'
+          git -C ../rec commit -qm "Recording from run ${{ github.run_id }} (${{ inputs.what }} ${{ inputs.ticker }})"
+          git -C ../rec push -q origin HEAD:recordings
+          echo "Saved to the recordings branch: ${#files[@]} file(s)."
+
+      - name: Upload recording and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recording-${{ github.run_id }}
+          path: |
+            backend/out/v13-recording-*.json
+            backend/out/record.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Failure notice
+        if: failure() || cancelled()
+        run: |
+          echo "::error::Recording did not finish cleanly. Download the artifact for the log."

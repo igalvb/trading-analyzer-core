@@ -1,0 +1,112 @@
+# Run watchdog (owner request 2026-11-04): once a day, checks every GitHub Actions run of the last 24 hours.
+#
+# Expected runs that did not happen (Nightly after every NYSE trading day, My Options every trading day), failed,
+# cancelled or timed-out runs, runs twice as slow as normal, and the problem lines of every run log (warnings,
+# errors, stack traces), grouped and counted; plus the GitHub minutes this month. One Telegram message and rows
+# in the Run Health tab of the reports spreadsheet. It never fails loudly: its own errors go to Telegram.
+# GitHub fires schedules late (often hours); that is fine. About 30-45 seconds (one billed minute) a day.
+name: Watchdog
+
+on:
+  schedule:
+    - cron: '7 6 * * *'
+  workflow_dispatch:
+    inputs:
+      user:
+        description: 'User id. owner = you (repo secrets, your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
+        type: string
+        default: owner
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ (inputs.user || 'owner') == 'owner' && 'watchdog' || format('watchdog-{0}', inputs.user) }}
+  cancel-in-progress: false
+
+env:
+  TZ: UTC
+  RUN_USER: ${{ inputs.user || 'owner' }}
+  SECRET_PREFIX: ${{ (inputs.user || 'owner') != 'owner' && format('{0}_', inputs.user) || '' }}
+  PROFILE_SOURCE: sheet
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  watchdog:
+    name: Check every run
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies (no dev tools)
+        working-directory: backend
+        run: npm ci --omit=dev --no-audit --no-fund
+
+      - name: Check the runs
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          TELEGRAM_CHAT_ID: ${{ secrets[format('{0}TELEGRAM_CHAT_ID', env.SECRET_PREFIX)] }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p out
+          npm run watchdog 2>&1 | tee out/watchdog.log
+
+      - name: Check the log for leaked keys
+        if: always()
+        working-directory: backend
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+        run: |
+          # Artifacts are NOT masked like the live log is, so check the file itself.
+          [ -f out/watchdog.log ] || exit 0
+          leaked=0
+          for name in TELEGRAM_BOT_TOKEN; do
+            value="${!name}"
+            if [ "${#value}" -ge 8 ] && grep -qF -- "$value" out/watchdog.log; then
+              echo "::error::The value of $name appears in the run log."
+              leaked=1
+            fi
+          done
+          if grep -q 'PRIVATE KEY-----' out/watchdog.log; then
+            echo "::error::A private key block appears in the run log."
+            leaked=1
+          fi
+          if [ "$leaked" = 1 ]; then
+            rm -f out/watchdog.log
+            echo "The log file was deleted so it is not uploaded."
+            exit 1
+          fi
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watchdog-log-${{ github.run_id }}
+          path: backend/out/watchdog.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Failure notice
+        if: failure() || cancelled()
+        run: |
+          echo "::error::The watchdog did not finish cleanly. Download the watchdog-log artifact."
+          echo "### Watchdog run FAILED" >> "$GITHUB_STEP_SUMMARY"

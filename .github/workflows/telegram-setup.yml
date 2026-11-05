@@ -1,0 +1,54 @@
+# One-time: connect the Telegram bot to the Cloudflare relay (relay/telegram-relay.worker.mjs) and set its command
+# menu (/exit, /analyze, /help). Manual only; run again if the relay address changes.
+name: Telegram Setup
+
+on:
+  workflow_dispatch:
+    inputs:
+      relay_url:
+        description: 'The relay address, e.g. https://trading-relay.yourname.workers.dev'
+        type: string
+        required: true
+      user:
+        description: 'User id. owner = you (repo secrets, your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
+        type: string
+        default: owner
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ (inputs.user || 'owner') == 'owner' && 'telegram' || format('telegram-{0}', inputs.user) }}
+  cancel-in-progress: false
+
+env:
+  TZ: America/New_York
+  RUN_USER: ${{ inputs.user || 'owner' }}
+  SECRET_PREFIX: ${{ (inputs.user || 'owner') != 'owner' && format('{0}_', inputs.user) || '' }}
+  PROFILE_SOURCE: sheet
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  telegram-setup:
+    name: Connect the bot to the relay
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Connect
+        working-directory: backend
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets[format('{0}TELEGRAM_WEBHOOK_SECRET', env.SECRET_PREFIX)] }}
+          RELAY_URL: ${{ inputs.relay_url }}
+        run: npm run telegram-setup -- "$RELAY_URL"

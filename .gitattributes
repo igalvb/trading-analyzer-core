@@ -1,0 +1,18 @@
+# Keep LF line endings everywhere, on every machine (Windows included).
+# The tests check backend/legacy/*.gs by checksum; CRLF would break them.
+* text=auto eol=lf
+
+# Binary files: never touch their bytes.
+*.zip binary
+*.gz binary
+*.pdf binary
+*.xlsx binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.mp4 binary
+*.skill binary
+
+# Old research result that was saved with CRLF: keep it byte for byte.
+tier1_REAL_DATA_results.csv -text

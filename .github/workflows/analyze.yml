@@ -1,0 +1,179 @@
+# Analyze one ticker from the phone: the Full Ticker Analysis (with AI unless turned off), a PDF of
+# every report page, and a short message plus the PDF in Telegram. Manual only.
+# The Sheet is updated too (same as running the ticker by hand) unless "Update the Sheet" is off.
+# With the AI on, Claude Opus gives a second opinion on Gemini's review unless "opus" is off (owner 2026-11-01).
+# No Anthropic key saved: one plain line in the report, the run goes on. The Telegram relay sends no opus input,
+# so the default (true) applies.
+name: Analyze
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: 'Ticker, for example TSLA'
+        type: string
+        required: true
+      ai:
+        description: 'Include the AI review (Gemini)'
+        type: boolean
+        default: true
+      update_sheet:
+        description: 'Also update the Sheet'
+        type: boolean
+        default: true
+      opus:
+        description: 'Add a Claude Opus second opinion (needs the AI review on and an Anthropic key)'
+        type: boolean
+        default: true
+      user:
+        description: 'User id. owner = you (repo secrets, your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
+        type: string
+        default: owner
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ (inputs.user || 'owner') == 'owner' && 'sheet-report-writers' || format('sheet-report-writers-{0}', inputs.user) }}
+  cancel-in-progress: false
+
+env:
+  LONG_HISTORY: 'on'
+  TZ: America/New_York
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
+  SCRIPT_TIME_ZONE: America/New_York
+  RUN_USER: ${{ inputs.user || 'owner' }}
+  SECRET_PREFIX: ${{ (inputs.user || 'owner') != 'owner' && format('{0}_', inputs.user) || '' }}
+  PROFILE_SOURCE: sheet
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  analyze:
+    name: Analyze and send
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check out the long price history (docs/LONG_HISTORY_PLAN.md; a missing branch is skipped)
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: prices
+          path: long-history
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Read the user profile tab (other users only)
+        if: env.PROFILE_SOURCE == 'sheet'
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          TELEGRAM_CHAT_ID: ${{ secrets[format('{0}TELEGRAM_CHAT_ID', env.SECRET_PREFIX)] }}
+        run: |
+          mkdir -p out
+          npm run profile-fetch -- --out "$PWD/out/profile.json"
+          echo "PROFILE_FILE=$PWD/out/profile.json" >> "$GITHUB_ENV"
+
+      - name: Analyze, make the PDF, send to Telegram
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          FMP_API_KEY: ${{ secrets[format('{0}FMP_API_KEY', env.SECRET_PREFIX)] }}
+          ALPHAVANTAGE_KEY: ${{ secrets[format('{0}ALPHAVANTAGE_KEY', env.SECRET_PREFIX)] }}
+          FINNHUB_KEY: ${{ secrets[format('{0}FINNHUB_KEY', env.SECRET_PREFIX)] }}
+          SEC_CONTACT_EMAIL: ${{ secrets[format('{0}SEC_CONTACT_EMAIL', env.SECRET_PREFIX)] }}
+          GEMINI_API_KEY: ${{ secrets[format('{0}GEMINI_API_KEY', env.SECRET_PREFIX)] }}
+          ANTHROPIC_API_KEY: ${{ secrets[format('{0}ANTHROPIC_API_KEY', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          TELEGRAM_CHAT_ID: ${{ secrets[format('{0}TELEGRAM_CHAT_ID', env.SECRET_PREFIX)] }}
+          TICKER: ${{ inputs.ticker }}
+          WITH_AI: ${{ inputs.ai }}
+          WITH_OPUS: ${{ inputs.opus }}
+          UPDATE_SHEET: ${{ inputs.update_sheet }}
+        run: |
+          mkdir -p out
+          TICKER="$(echo "$TICKER" | tr -d '[:space:]')"
+          if ! [[ "$TICKER" =~ ^[A-Za-z0-9.^-]{1,12}$ ]]; then
+            echo "::error::Ticker must be letters, digits, dot, caret or dash."
+            exit 2
+          fi
+          args=("$TICKER")
+          [ "$WITH_AI" = "true" ] || args+=(--no-ai)
+          [ "$WITH_OPUS" = "false" ] && args+=(--no-opus)
+          [ "$UPDATE_SHEET" = "true" ] || args+=(--memory)
+          export RUN_LOG_FILE="$PWD/out/analyze.log"  # the full log, every level (core/logFile.ts)
+          npm run analyze-report -- "${args[@]}" 2>&1 | tee out/analyze.console.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Re-lock sheet tabs (always)
+        if: always() && inputs.update_sheet
+        timeout-minutes: 5
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+        run: npm run lock-sheets
+
+      - name: Check the log for leaked keys
+        if: always()
+        working-directory: backend
+        env:
+          FMP_API_KEY: ${{ secrets[format('{0}FMP_API_KEY', env.SECRET_PREFIX)] }}
+          ALPHAVANTAGE_KEY: ${{ secrets[format('{0}ALPHAVANTAGE_KEY', env.SECRET_PREFIX)] }}
+          FINNHUB_KEY: ${{ secrets[format('{0}FINNHUB_KEY', env.SECRET_PREFIX)] }}
+          GEMINI_API_KEY: ${{ secrets[format('{0}GEMINI_API_KEY', env.SECRET_PREFIX)] }}
+          ANTHROPIC_API_KEY: ${{ secrets[format('{0}ANTHROPIC_API_KEY', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+        run: |
+          # Artifacts are NOT masked like the live log is, so check the file itself.
+          ls out/analyze*.log >/dev/null 2>&1 || exit 0
+          leaked=0
+          for name in FMP_API_KEY ALPHAVANTAGE_KEY FINNHUB_KEY GEMINI_API_KEY ANTHROPIC_API_KEY TELEGRAM_BOT_TOKEN; do
+            value="${!name}"
+            if [ "${#value}" -ge 8 ] && grep -qF -- "$value" out/analyze*.log; then
+              echo "::error::The value of $name appears in the run log."
+              leaked=1
+            fi
+          done
+          if grep -q 'PRIVATE KEY-----' out/analyze*.log; then
+            echo "::error::A private key block appears in the run log."
+            leaked=1
+          fi
+          if [ "$leaked" = 1 ]; then
+            rm -f out/analyze*.log
+            echo "The log was deleted so it is not uploaded."
+            exit 1
+          fi
+
+      - name: Upload the PDF and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyze-${{ github.run_id }}
+          path: |
+            backend/out/v13-report-*.pdf
+            backend/out/analyze*.log
+          if-no-files-found: warn
+          retention-days: 30

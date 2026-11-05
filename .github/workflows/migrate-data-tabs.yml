@@ -1,0 +1,150 @@
+# Three spreadsheets: move the data tabs and the report tabs out of My Portfolio
+# (docs/SHEETS_CLEANUP_PLAN.md (e)). Manual only, one step per run.
+#
+# Its OWN concurrency group (sheet-migration), not sheet-report-writers: GitHub keeps only the
+# newest pending run per group, so a migration queued with the writers would let a second
+# Telegram /analyze silently cancel the first one. Instead every writing step sets a maintenance
+# pause on My Portfolio (writers then exit cleanly and say "send it again after HH:MM"), waits for
+# running writer runs (actions: read), works, and clears the pause. The tool refuses to start a
+# writing step between 20:30 and 23:00 UTC (My Options) and between 03:00 and 05:30 UTC (Nightly).
+name: Migrate data tabs
+
+on:
+  workflow_dispatch:
+    inputs:
+      step:
+        description: 'Which step'
+        type: choice
+        required: true
+        default: check
+        options:
+          - check
+          - plan
+          - rehearse
+          - rehearse-cleanup
+          - migrate
+          - delete
+          - copy-back
+          - abort
+      confirm_delete:
+        description: 'delete: really delete (otherwise a dry run)'
+        type: boolean
+        default: false
+      accept_references:
+        description: 'migrate: the owner reviewed the direct references and keeps them'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: sheet-migration
+  cancel-in-progress: false
+
+env:
+  TZ: UTC
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
+  SCRIPT_TIME_ZONE: America/New_York
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  migrate:
+    name: Migration step
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Run the migration step
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets.REPORTS_SPREADSHEET_ID }}
+          DATA_SPREADSHEET_ID: ${{ secrets.DATA_SPREADSHEET_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+          STEP: ${{ inputs.step }}
+          YES: ${{ inputs.confirm_delete }}
+          ACCEPT_REFERENCES: ${{ inputs.accept_references }}
+        run: |
+          mkdir -p out
+          args=("$STEP")
+          [ "$YES" = "true" ] && args+=(--yes)
+          [ "$ACCEPT_REFERENCES" = "true" ] && args+=(--accept-references)
+          export RUN_LOG_FILE="$PWD/out/migration.log"  # the full log, every level (core/logFile.ts)
+          npm run migrate-data-tabs -- "${args[@]}" 2>&1 | tee out/migration.console.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Clear the maintenance pause (always)
+        if: always()
+        timeout-minutes: 5
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets.REPORTS_SPREADSHEET_ID }}
+          DATA_SPREADSHEET_ID: ${{ secrets.DATA_SPREADSHEET_ID }}
+        run: |
+          mkdir -p out
+          export RUN_LOG_FILE="$PWD/out/migration.log"  # the full log, every level (core/logFile.ts)
+          npm run migrate-data-tabs -- unpause 2>&1 | tee -a out/migration.console.log
+
+      - name: Re-lock sheet tabs (always)
+        if: always()
+        timeout-minutes: 5
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets.REPORTS_SPREADSHEET_ID }}
+          DATA_SPREADSHEET_ID: ${{ secrets.DATA_SPREADSHEET_ID }}
+        run: npm run lock-sheets
+
+      - name: Check the log for a leaked key
+        if: always()
+        working-directory: backend
+        run: |
+          ls out/migration*.log >/dev/null 2>&1 || exit 0
+          if grep -q 'PRIVATE KEY-----' out/migration*.log; then
+            echo "::error::A private key block appears in the run log; deleting it."
+            rm -f out/migration*.log
+            exit 1
+          fi
+
+      - name: Upload the migration report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-${{ inputs.step }}-${{ github.run_id }}
+          path: backend/out/migration*.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Failure notice
+        if: failure() || cancelled()
+        run: |
+          # docs/LOGGING_SPEC.md: the counts come from the full run log (every level; RUN_LOG_FILE).
+          full=backend/out/migration.log
+          count() { if [ -f "$full" ]; then grep -cE "^[^ ]+ $1( |$)" "$full" || true; else echo "unknown"; fi; }
+          echo "::error::Run log: $(count CRITICAL) CRITICAL, $(count ERROR) ERROR, $(count WARNING) WARNING line(s) (the full log is the migration.log file of the artifact)."
+          echo "- Log lines: $(count CRITICAL) critical, $(count ERROR) error, $(count WARNING) warning" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::The migration step did not finish cleanly. Download the migration artifact."
+          echo "### Migration step FAILED" >> "$GITHUB_STEP_SUMMARY"

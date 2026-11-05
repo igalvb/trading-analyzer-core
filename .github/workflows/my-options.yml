@@ -1,0 +1,160 @@
+# My Options value refresh, about 17:00 New York time every day.
+#
+# GitHub cron is UTC only and New York changes its clocks, so there are TWO cron
+# lines: 21:05 UTC is 17:05 New York in summer (EDT) and 22:05 UTC is 17:05 in winter
+# (EST). GitHub's schedules fire 3 to 7 hours late (seen at 00:30-03:26 UTC), so a
+# scheduled run goes ahead when the New York hour is 17 or later (the same New York day,
+# until midnight) AND no successful My Options run was created since 17:00 New York today
+# (owner 2026-11-04). The first step checks both and ends the run early otherwise.
+# A manual run (workflow_dispatch, also the relay) skips the check and always runs.
+name: My Options
+
+on:
+  schedule:
+    - cron: '5 21 * * *'
+    - cron: '5 22 * * *'
+  workflow_dispatch:
+    inputs:
+      user:
+        description: 'User id. owner = you (repo secrets, your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
+        type: string
+        default: owner
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ (inputs.user || 'owner') == 'owner' && 'my-options' || format('my-options-{0}', inputs.user) }}
+  cancel-in-progress: false
+
+env:
+  TZ: America/New_York
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
+  SCRIPT_TIME_ZONE: America/New_York
+  TARGET_ET_HOUR: '17'
+  RUN_USER: ${{ inputs.user || 'owner' }}
+  SECRET_PREFIX: ${{ (inputs.user || 'owner') != 'owner' && format('{0}_', inputs.user) || '' }}
+  PROFILE_SOURCE: sheet
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  my-options:
+    name: Refresh My Options values
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: New York hour guard
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          et_hour="$(TZ=America/New_York date +%H)"
+          et_hour=$((10#$et_hour))
+          echo "Event: $GITHUB_EVENT_NAME; New York hour now: $et_hour; wanted: $TARGET_ET_HOUR or later"
+          if [ "$GITHUB_EVENT_NAME" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$et_hour" -lt "$TARGET_ET_HOUR" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Before ${TARGET_ET_HOUR}:00 New York (wrong clock-change arm); ending early on purpose."
+          else
+            since_epoch="$(TZ=America/New_York date -d "$(TZ=America/New_York date +%F) ${TARGET_ET_HOUR}:00" +%s)"
+            since="$(date -u -d "@$since_epoch" +%Y-%m-%dT%H:%M:%SZ)"
+            done_runs="$(gh api "repos/$GH_REPO/actions/workflows/my-options.yml/runs?status=success&created=%3E%3D${since}&per_page=1" --jq '.total_count' 2>/dev/null || echo unknown)"
+            echo "Successful My Options runs created since $since (17:00 New York): $done_runs"
+            if [ "$done_runs" = "0" ] || [ "$done_runs" = "unknown" ]; then
+              echo "run=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "My Options already ran today after ${TARGET_ET_HOUR}:00 New York; ending early on purpose."
+            fi
+          fi
+
+      - name: Check out repository
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        if: steps.guard.outputs.run == 'true'
+        working-directory: backend
+        run: npm ci
+
+      - name: Read the user profile tab (other users only)
+        if: env.PROFILE_SOURCE == 'sheet' && steps.guard.outputs.run == 'true'
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+        run: |
+          mkdir -p out
+          npm run profile-fetch -- --out "$PWD/out/profile.json"
+          echo "PROFILE_FILE=$PWD/out/profile.json" >> "$GITHUB_ENV"
+
+      - name: Refresh My Options values
+        if: steps.guard.outputs.run == 'true'
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          SEC_CONTACT_EMAIL: ${{ secrets[format('{0}SEC_CONTACT_EMAIL', env.SECRET_PREFIX)] }}
+        run: |
+          mkdir -p out
+          export RUN_LOG_FILE="$PWD/out/my-options.log"  # the full log, every level (core/logFile.ts)
+          npm run my-options 2>&1 | tee out/my-options.console.log
+
+      - name: Re-lock sheet tabs (always)
+        if: always() && steps.guard.outputs.run == 'true'
+        timeout-minutes: 5
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+        run: npm run lock-sheets
+
+      - name: Check the log for a leaked key
+        if: always() && steps.guard.outputs.run == 'true'
+        working-directory: backend
+        run: |
+          ls out/my-options*.log >/dev/null 2>&1 || exit 0
+          if grep -q 'PRIVATE KEY-----' out/my-options*.log; then
+            echo "::error::A private key block appears in the run log; deleting it."
+            rm -f out/my-options*.log
+            exit 1
+          fi
+
+      - name: Upload run log
+        if: always() && steps.guard.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-options-log-${{ github.run_id }}
+          path: backend/out/my-options*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Failure notice
+        if: failure() || cancelled()
+        run: |
+          # docs/LOGGING_SPEC.md: the counts come from the full run log (every level; RUN_LOG_FILE).
+          full=backend/out/my-options.log
+          count() { if [ -f "$full" ]; then grep -cE "^[^ ]+ $1( |$)" "$full" || true; else echo "unknown"; fi; }
+          echo "::error::Run log: $(count CRITICAL) CRITICAL, $(count ERROR) ERROR, $(count WARNING) WARNING line(s) (the full log is the my-options.log file of the artifact)."
+          echo "- Log lines: $(count CRITICAL) critical, $(count ERROR) error, $(count WARNING) warning" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::My Options refresh did not finish cleanly. Download the my-options-log artifact."
+          echo "### My Options run FAILED" >> "$GITHUB_STEP_SUMMARY"

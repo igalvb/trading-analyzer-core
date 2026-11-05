@@ -1,0 +1,117 @@
+# Verify (owner request 2026-11-04): layer 2 of the run monitoring, started by hand (Telegram /verify or /check).
+#
+# The watchdog's facts for the last few days (every run and its result, runs that did not happen, slow runs, the
+# grouped problem lines of every run log, the GitHub minutes) plus the Run Health tab rows, then ONE Claude Opus
+# diagnosis: problem, likely root cause, severity, concrete fix, whether you are needed. Sent to Telegram.
+# Read-only: changes no code, no workflow, no sheet (except one Verify row in Run Health). No Anthropic key: the
+# watchdog table only. It never fails loudly: its own errors go to Telegram. About 2 minutes.
+name: Verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'How many days back to check (1-7)'
+        type: string
+        default: '3'
+      user:
+        description: 'User id. owner = you (repo secrets, your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
+        type: string
+        default: owner
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ (inputs.user || 'owner') == 'owner' && 'verify' || format('verify-{0}', inputs.user) }}
+  cancel-in-progress: false
+
+env:
+  TZ: UTC
+  RUN_USER: ${{ inputs.user || 'owner' }}
+  SECRET_PREFIX: ${{ (inputs.user || 'owner') != 'owner' && format('{0}_', inputs.user) || '' }}
+  PROFILE_SOURCE: sheet
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    name: Verify the last days
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies (no dev tools)
+        working-directory: backend
+        run: npm ci --omit=dev --no-audit --no-fund
+
+      - name: Verify the runs
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          TELEGRAM_CHAT_ID: ${{ secrets[format('{0}TELEGRAM_CHAT_ID', env.SECRET_PREFIX)] }}
+          ANTHROPIC_API_KEY: ${{ secrets[format('{0}ANTHROPIC_API_KEY', env.SECRET_PREFIX)] }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          VERIFY_DAYS: ${{ inputs.days || '3' }}
+        run: |
+          mkdir -p out
+          npm run ops-verify 2>&1 | tee out/verify.log
+
+      - name: Check the log for leaked keys
+        if: always()
+        working-directory: backend
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          ANTHROPIC_API_KEY: ${{ secrets[format('{0}ANTHROPIC_API_KEY', env.SECRET_PREFIX)] }}
+        run: |
+          # Artifacts are NOT masked like the live log is, so check the file itself.
+          [ -f out/verify.log ] || exit 0
+          leaked=0
+          for name in TELEGRAM_BOT_TOKEN ANTHROPIC_API_KEY; do
+            value="${!name}"
+            if [ "${#value}" -ge 8 ] && grep -qF -- "$value" out/verify.log; then
+              echo "::error::The value of $name appears in the run log."
+              leaked=1
+            fi
+          done
+          if grep -q 'PRIVATE KEY-----' out/verify.log; then
+            echo "::error::A private key block appears in the run log."
+            leaked=1
+          fi
+          if [ "$leaked" = 1 ]; then
+            rm -f out/verify.log
+            echo "The log file was deleted so it is not uploaded."
+            exit 1
+          fi
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-log-${{ github.run_id }}
+          path: backend/out/verify.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Failure notice
+        if: failure() || cancelled()
+        run: |
+          echo "::error::The verification did not finish cleanly. Download the verify-log artifact."
+          echo "### Verify run FAILED" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,12 @@
+{
+  "fullStockAnalysisV10_9.gs": "ba96a88a28d6010690238c373c866d13d1842a923953c34b6de0f3f6d6f7f671",
+  "dataLayerV1.gs": "37e7aca3d910c00d4d398c727843984b4dcfd389dab2cc8774e1af12dffbf03b",
+  "brokerCourseModelV1.gs": "fcced52384dff5176e2e4b88d5c91b0b778f33d108972a3fc49e6169f40b2a4d",
+  "futuresStockAnalysisV3_3_11.gs": "2f59da92d7296dc829bc992c3d1cce79739716a344d2a6abc59940c502fb8c2d",
+  "turtleModelV1.gs": "73ee11c7aef570fc890e74613dcb1c830f954e2ec68d25fbeec3e702e14d9fb7",
+  "darkPoolTrackerV1.gs": "461b1b6beb91428b903e1538471c33c620c3b0526f51975c67034e093f1e2195",
+  "schabackerModelV1.gs": "46bfc348d9c9742f6216161d6136d4ff1e535456d81dcbb4aefd04f506f33f61",
+  "edwardsMageeModelV1.gs": "5dc08da62dc72412ab5d2419fb38b91bef26f861338926554f1b8206473cb6ce",
+  "macro_fetchers_v0_15.gs": "578f9ffd37ecce4a2d8ed13d076ae1021c10e2841a11f01d6fdceb5b653d94c0",
+  "myOptionsValueTracker.gs": "43ecccfe8620f236117feea82b86471aa98ccd9401cf719357cdd81d5e0a278d"
+}

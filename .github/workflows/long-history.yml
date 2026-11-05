@@ -1,0 +1,105 @@
+# Long price history (docs/LONG_HISTORY_PLAN.md): daily bars from 2007 for the default ticker set (the profile's lists,
+# the research universe, SPY / QQQ / ^VIX and the sector ETFs) plus any tickers typed below, one CSV per ticker, committed
+# to the separate `prices` branch (never main). Manual only. backfill = every ticker in full (the first run);
+# append = the bars after each file's last one (a ticker without a file, or with a split since, in full).
+# The live runs use the files only once LONG_HISTORY=on is set (off today: nothing reads this branch yet).
+name: Long History
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'backfill = every ticker in full, 2007 to today (first run); append = only the new bars'
+        type: choice
+        default: backfill
+        options:
+          - backfill
+          - append
+      tickers:
+        description: 'Extra tickers, separated by spaces (optional; empty = the default set only)'
+        type: string
+        default: ''
+
+# write: ONLY to push the price files to the separate `prices` branch (never main).
+permissions:
+  contents: write
+
+concurrency:
+  group: long-history
+  cancel-in-progress: false
+
+env:
+  TZ: America/New_York
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  long-history:
+    name: Download and commit the long price history
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Open the prices branch
+        run: |
+          set -euo pipefail
+          dest="$RUNNER_TEMP/prices-branch"
+          if git ls-remote --exit-code --heads origin prices >/dev/null; then
+            git fetch -q origin prices
+            git worktree add -q "$dest" FETCH_HEAD
+          else
+            git worktree add -q --detach "$dest"
+            (cd "$dest" && git checkout -q --orphan prices-new && git rm -rq --cached . && find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +)
+          fi
+          echo "DEST=$dest" >> "$GITHUB_ENV"
+
+      - name: Download the prices
+        working-directory: backend
+        env:
+          MODE: ${{ inputs.mode }}
+          TICKERS: ${{ inputs.tickers }}
+        run: |
+          set -euo pipefail
+          set -f
+          extra=()
+          for t in $TICKERS; do
+            if ! [[ "$t" =~ ^[A-Za-z0-9.^=-]{1,12}$ ]]; then echo "::error::Not a ticker: $t"; exit 2; fi
+            extra+=("$t")
+          done
+          case "$MODE" in
+            backfill|append) ;;
+            *) echo "::error::Unknown mode."; exit 2 ;;
+          esac
+          npm run long-history -- "$MODE" "$DEST/prices"
+          if [ "${#extra[@]}" -gt 0 ]; then npm run long-history -- "$MODE" "$DEST/prices" "${extra[@]}"; fi
+          npm run long-history -- check "$DEST/prices" | tail -n 1
+
+      - name: Commit to the prices branch
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          cd "$DEST"
+          git config user.name "long-history"
+          git config user.email "long-history@users.noreply.github.com"
+          git add prices
+          git commit -q -m "Long price history: $MODE" || { echo "Nothing new."; exit 0; }
+          git push -q origin HEAD:prices
+          echo "Committed to branch prices."
