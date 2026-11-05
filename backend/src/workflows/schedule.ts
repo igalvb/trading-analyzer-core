@@ -163,7 +163,8 @@ export const TELEGRAM_CHECK: WorkflowSpec = {
 };
 /**
  * Analyze one ticker from the phone (src/analyzeReport.ts): Sheet, PDF, Telegram. Queues behind the nightly.
- * Owner 2026-11-01: plus a Claude Opus second opinion (ANTHROPIC_API_KEY; input `opus`, default true, ANALYZE_INPUTS).
+ * Owner 2026-11-01: plus a Claude Opus second opinion (ANTHROPIC_API_KEY; input `opus`, ANALYZE_INPUTS). Owner 2026-11-05: Opus
+ * is paid, so it runs only when asked (`opus` default false; Telegram "+ Opus" button or `/analyze TICKER opus`).
  */
 export const ANALYZE: WorkflowSpec = {
   file: 'analyze.yml', crons: [], dispatch: true, timeoutMinutes: 30, concurrencyGroup: perUserGroup('sheet-report-writers'), perUser: true, readsProfile: true,
@@ -176,10 +177,14 @@ export const EXIT_REPORT: WorkflowSpec = {
   secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'SEC_CONTACT_EMAIL', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
   commands: ['npm run exit-report-pdf', 'npm run lock-sheets'],
 };
-/** Telegram /exit (src/sendExit.ts): the saved Exit Report as a PDF; the Exit AI (Gemini) first when its section is empty. */
+/**
+ * Telegram /exit (src/sendExit.ts): the saved Exit Report as a PDF; the Exit AI (Gemini) first when its section is empty.
+ * Owner 2026-11-05: `/exit opus` (input `opus`, SEND_EXIT_INPUTS) re-runs the Exit AI with Opus (paid) and its
+ * portfolio-wide view before sending.
+ */
 export const SEND_EXIT: WorkflowSpec = {
   file: 'send-exit.yml', crons: [], dispatch: true, timeoutMinutes: 20, concurrencyGroup: perUserGroup('sheet-report-writers'), perUser: true, readsProfile: true,
-  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'SEC_CONTACT_EMAIL', 'GEMINI_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
+  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'SEC_CONTACT_EMAIL', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
   commands: ['npm run send-exit', 'npm run ai', 'npm run lock-sheets'],
 };
 /** One-time: connect the bot to the Cloudflare relay and set its menu (src/telegramSetup.ts). */
@@ -279,14 +284,19 @@ export const AI_INPUTS: ReadonlyArray<{ readonly name: string; readonly type: 'b
 export const AI_EFFORT_OPTIONS: readonly string[] = ['low', 'medium', 'high'];
 
 /**
- * analyze.yml's dispatch inputs before `user` (owner 2026-11-01: `opus`, default true). The Telegram relay sends
- * {ticker, ai, update_sheet} only, so `opus` takes its default.
+ * analyze.yml's dispatch inputs before `user`. Owner 2026-11-05: `opus` defaults to false (paid; on request only). The
+ * Telegram relay sends `opus` 'true' only for the "+ Opus" button or `/analyze TICKER opus`.
  */
 export const ANALYZE_INPUTS: ReadonlyArray<{ readonly name: string; readonly type: 'boolean' | 'string'; readonly default: string }> = [
   { name: 'ticker', type: 'string', default: '' },
   { name: 'ai', type: 'boolean', default: 'true' },
   { name: 'update_sheet', type: 'boolean', default: 'true' },
-  { name: 'opus', type: 'boolean', default: 'true' },
+  { name: 'opus', type: 'boolean', default: 'false' },
+];
+
+/** send-exit.yml's dispatch inputs before `user` (owner 2026-11-05: `opus`, paid, on request only). */
+export const SEND_EXIT_INPUTS: ReadonlyArray<{ readonly name: string; readonly type: 'boolean'; readonly default: string }> = [
+  { name: 'opus', type: 'boolean', default: 'false' },
 ];
 
 // ---- cron + time-zone helpers -------------------------------------------------------

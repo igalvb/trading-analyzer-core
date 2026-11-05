@@ -1,11 +1,16 @@
 # Telegram /exit: send the SAVED Exit Report (no re-run) as a PDF with a short message. Manual (started by the
 # Telegram relay or by hand). If the report's AI section is still empty, the Exit AI (Gemini, low effort) is
-# added first, so the PDF always has the AI part.
+# added first, so the PDF always has the AI part. `opus` (Telegram `/exit opus`, owner 2026-11-05): the Exit AI is
+# re-run with Opus too (paid, about $0.25), plus its portfolio-wide view, before the PDF is sent.
 name: Send Exit Report
 
 on:
   workflow_dispatch:
     inputs:
+      opus:
+        description: 'Re-run the Exit AI with Claude Opus first (paid, about $0.25; needs an Anthropic key)'
+        type: boolean
+        default: false
       user:
         description: 'User id. owner = you (repo secrets, your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
         type: string
@@ -84,6 +89,8 @@ jobs:
           FINNHUB_KEY: ${{ secrets[format('{0}FINNHUB_KEY', env.SECRET_PREFIX)] }}
           SEC_CONTACT_EMAIL: ${{ secrets[format('{0}SEC_CONTACT_EMAIL', env.SECRET_PREFIX)] }}
           GEMINI_API_KEY: ${{ secrets[format('{0}GEMINI_API_KEY', env.SECRET_PREFIX)] }}
+          ANTHROPIC_API_KEY: ${{ secrets[format('{0}ANTHROPIC_API_KEY', env.SECRET_PREFIX)] }}
+          WITH_OPUS: ${{ inputs.opus }}
           TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
           TELEGRAM_CHAT_ID: ${{ secrets[format('{0}TELEGRAM_CHAT_ID', env.SECRET_PREFIX)] }}
         run: |
@@ -91,7 +98,9 @@ jobs:
           export RUN_LOG_FILE="$PWD/out/send-exit.log"  # the full log, every level (core/logFile.ts)
           status="$(npm run -s send-exit -- --ai-status 2>>out/send-exit.console.log | tail -1)"
           echo "AI section: $status"
-          if [ "$status" = "missing" ]; then
+          if [ "$WITH_OPUS" = "true" ]; then
+            BUY=false EXIT=true EXIT_GEMINI=true EXIT_OPUS=true EFFORT=medium npm run ai 2>&1 | tee -a out/send-exit.console.log
+          elif [ "$status" = "missing" ]; then
             BUY=false EXIT=true EXIT_GEMINI=true EXIT_OPUS=false EFFORT=low npm run ai 2>&1 | tee -a out/send-exit.console.log
           fi
           npm run send-exit 2>&1 | tee -a out/send-exit.console.log
@@ -116,12 +125,13 @@ jobs:
           ALPHAVANTAGE_KEY: ${{ secrets[format('{0}ALPHAVANTAGE_KEY', env.SECRET_PREFIX)] }}
           FINNHUB_KEY: ${{ secrets[format('{0}FINNHUB_KEY', env.SECRET_PREFIX)] }}
           GEMINI_API_KEY: ${{ secrets[format('{0}GEMINI_API_KEY', env.SECRET_PREFIX)] }}
+          ANTHROPIC_API_KEY: ${{ secrets[format('{0}ANTHROPIC_API_KEY', env.SECRET_PREFIX)] }}
           TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
         run: |
           # Artifacts are NOT masked like the live log is, so check the file itself.
           ls out/send-exit*.log >/dev/null 2>&1 || exit 0
           leaked=0
-          for name in FMP_API_KEY ALPHAVANTAGE_KEY FINNHUB_KEY GEMINI_API_KEY TELEGRAM_BOT_TOKEN; do
+          for name in FMP_API_KEY ALPHAVANTAGE_KEY FINNHUB_KEY GEMINI_API_KEY ANTHROPIC_API_KEY TELEGRAM_BOT_TOKEN; do
             value="${!name}"
             if [ "${#value}" -ge 8 ] && grep -qF -- "$value" out/send-exit*.log; then
               echo "::error::The value of $name appears in the run log."

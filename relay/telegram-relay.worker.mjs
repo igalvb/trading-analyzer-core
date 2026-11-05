@@ -29,23 +29,28 @@
  * skips late runs). Deploy this code BEFORE adding the triggers (older code started the nightly on any trigger).
  * Every timer starts the job once per user, the owner first, then USERS in their order (never one trigger per user).
  *
- * Commands: /exit, /analyze (a button menu of stocks + "Other ticker"), /analyze TICKER, /verify (alias /check: the
- * Opus check of the last 3 days of runs, verify.yml), /help (anything else gets the help text). "Other ticker" asks for the ticker; the answer to that question starts the run.
+ * Commands: /exit, /exit opus, /analyze (a button menu of stocks + "Other ticker"), /analyze TICKER [opus], /verify
+ * (alias /check: the Opus check of the last 3 days of runs, verify.yml), /help (anything else gets the help text).
+ * "Other ticker" asks for the ticker; the answer to that question ("COIN" or "COIN opus") starts the run.
+ * Owner 2026-11-05: Claude Opus is paid, so it runs only when asked: after a stock button, two buttons
+ * "Free (Gemini)" / "+ Opus"; or the word `opus` after the command. Without it, analyze sends no `opus` input
+ * (analyze.yml defaults it to false) and /exit sends none (send-exit.yml defaults it to false).
  */
 
 /** Bumped on every change, so the live version can be checked (a GET on the relay answers with it). */
-export const RELAY_VERSION = '2026-11-04.1';
+export const RELAY_VERSION = '2026-11-05.1';
 /** The owner's user id (the workflows' default `user`). */
 export const OWNER_USER = 'owner';
 /** A user id that is also a GitHub secret prefix (same rule as backend/src/profile/runUser.ts). */
 const USER_RE = /^[a-z][a-z0-9_]{0,19}$/;
-const ASK_TICKER = '✏️ Type the ticker to analyse (for example COIN):';
+const ASK_TICKER = '✏️ Type the ticker to analyse (for example COIN, or COIN opus for Claude Opus too):';
 const TICKER_RE = /^[A-Z0-9.^-]{1,12}$/;
 const HELP = [
   'Commands:',
   '/exit: the latest Exit Report as a PDF (stocks and options, as saved by last night, with the AI part). About 1 min, about 4 if the AI part is added first.',
-  '/analyze: pick a stock from the buttons, or "Other ticker" to type one. Full analysis (Sheet + PDF), about 3 min.',
-  '/analyze AAPL: the same, typed directly.',
+  '/exit opus: the same, with a Claude Opus read of every holding first (paid, about $0.25). About 4 min.',
+  '/analyze: pick a stock, then Free (Gemini) or + Opus (paid, about $0.15). Full analysis (Sheet + PDF), about 3 min.',
+  '/analyze AAPL: free (Gemini). /analyze AAPL opus: with Claude Opus too.',
   '/verify (or /check): checks every run of the last 3 days and asks Claude Opus what went wrong and how to fix it. About 2 min.',
 ].join('\n');
 /** The /verify reply and the days it checks (verify.yml `days`). */
@@ -102,6 +107,11 @@ export function inputsFor(user, inputs) {
   return user === OWNER_USER ? inputs : { ...inputs, user };
 }
 
+/** After a stock button: free (Gemini only) or with Opus (paid). */
+export function opusChoice(ticker) {
+  return { inline_keyboard: [[{ text: '🆓 Free (Gemini)', callback_data: 'g:' + ticker }, { text: '💎 + Opus (~$0.15)', callback_data: 'o:' + ticker }]] };
+}
+
 /** The /analyze menu: 4 stocks a row, then "Other ticker". */
 export function analyzeMenu(tickers) {
   const rows = [];
@@ -120,9 +130,17 @@ async function reply(env, chat, text, replyMarkup) {
   await tg(env, 'sendMessage', { chat_id: chat, text, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
 }
 
-async function startAnalyze(env, who, ticker) {
-  const err = await dispatch(env, 'analyze.yml', inputsFor(who.user, { ticker, ai: 'true', update_sheet: 'true' }));
-  if (err) await refused(env, who, err); else await reply(env, who.chat, '⏳ Analysing ' + ticker + '… about 3 min.');
+async function startAnalyze(env, who, ticker, opus) {
+  const err = await dispatch(env, 'analyze.yml', inputsFor(who.user, { ticker, ai: 'true', update_sheet: 'true', ...(opus ? { opus: 'true' } : {}) }));
+  if (err) await refused(env, who, err); else await reply(env, who.chat, '⏳ Analysing ' + ticker + (opus ? ' with Opus' : '') + '… about 3 min.');
+}
+
+/** A typed ticker, optionally followed by the word opus: "COIN", "$coin opus". null = not a ticker. */
+export function parseTickerOpus(text) {
+  const m = /^\$?([A-Za-z0-9.^-]{1,12})(?:\s+(opus))?$/i.exec(String(text || '').trim());
+  if (!m) return null;
+  const ticker = m[1].toUpperCase();
+  return TICKER_RE.test(ticker) ? { ticker, opus: !!m[2] } : null;
 }
 
 async function dispatch(env, workflow, inputs) {
@@ -176,9 +194,13 @@ export function parseCommand(text) {
   const m = /^\/(\w+)(?:@\w+)?(?:\s+(.*))?$/.exec(t);
   if (!m) return { kind: 'help' };
   const cmd = m[1].toLowerCase(), arg = (m[2] || '').trim().toUpperCase();
-  if (cmd === 'exit') return { kind: 'exit' };
+  if (cmd === 'exit') return arg === 'OPUS' ? { kind: 'exit', opus: true } : { kind: 'exit' };
   if (cmd === 'verify' || cmd === 'check') return { kind: 'verify' };
-  if (cmd === 'analyze') return !arg ? { kind: 'analyze-menu' } : TICKER_RE.test(arg) ? { kind: 'analyze', ticker: arg } : { kind: 'analyze-usage' };
+  if (cmd === 'analyze') {
+    if (!arg) return { kind: 'analyze-menu' };
+    const t = parseTickerOpus(arg);
+    return !t ? { kind: 'analyze-usage' } : t.opus ? { kind: 'analyze', ticker: t.ticker, opus: true } : { kind: 'analyze', ticker: t.ticker };
+  }
   return { kind: 'help' };
 }
 
@@ -211,7 +233,8 @@ export default {
       await tg(env, 'answerCallbackQuery', { callback_query_id: cq.id });
       const data = String(cq.data || '');
       if (data === 'a:?') await reply(env, who.chat, ASK_TICKER, { force_reply: true, input_field_placeholder: 'Ticker, e.g. COIN' });
-      else if (data.startsWith('a:') && TICKER_RE.test(data.slice(2))) await startAnalyze(env, who, data.slice(2));
+      else if (data.startsWith('a:') && TICKER_RE.test(data.slice(2))) await reply(env, who.chat, '📊 ' + data.slice(2) + ': free, or with Claude Opus (paid)?', opusChoice(data.slice(2)));
+      else if ((data.startsWith('g:') || data.startsWith('o:')) && TICKER_RE.test(data.slice(2))) await startAnalyze(env, who, data.slice(2), data.startsWith('o:'));
       return new Response('ok');
     }
     const msg = update && update.message;
@@ -219,20 +242,20 @@ export default {
     if (!who) return new Response('ok');
     // The answer to "Type the ticker".
     if (msg.reply_to_message && msg.reply_to_message.text === ASK_TICKER) {
-      const t = String(msg.text || '').trim().toUpperCase().replace(/^\$/, '');
-      if (TICKER_RE.test(t)) await startAnalyze(env, who, t);
+      const t = parseTickerOpus(msg.text);
+      if (t) await startAnalyze(env, who, t.ticker, t.opus);
       else await reply(env, who.chat, 'That does not look like a ticker. Tap /analyze and try again.');
       return new Response('ok');
     }
     const c = parseCommand(msg.text);
     if (c.kind === 'exit') {
-      const err = await dispatch(env, 'send-exit.yml', inputsFor(who.user, {}));
-      if (err) await refused(env, who, err); else await reply(env, who.chat, '⏳ Getting the Exit Report…');
+      const err = await dispatch(env, 'send-exit.yml', inputsFor(who.user, c.opus ? { opus: 'true' } : {}));
+      if (err) await refused(env, who, err); else await reply(env, who.chat, c.opus ? '⏳ Exit Report with Opus… about 4 min.' : '⏳ Getting the Exit Report…');
     } else if (c.kind === 'verify') {
       const err = await dispatch(env, 'verify.yml', inputsFor(who.user, { days: VERIFY_DAYS }));
       if (err) await refused(env, who, err); else await reply(env, who.chat, VERIFY_REPLY);
     } else if (c.kind === 'analyze') {
-      await startAnalyze(env, who, c.ticker);
+      await startAnalyze(env, who, c.ticker, c.opus === true);
     } else if (c.kind === 'analyze-menu') {
       await reply(env, who.chat, who.tickers.length ? '📊 Which stock?' : '📊 No TICKERS setting in the relay yet. Tap "Other ticker" to type one.', analyzeMenu(who.tickers));
     } else if (c.kind === 'analyze-usage') {

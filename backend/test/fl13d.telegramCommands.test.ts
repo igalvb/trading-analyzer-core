@@ -77,6 +77,9 @@ describe('FL-13d — Telegram commands', () => {
     assert.deepEqual(parseCommand('/analyze tsla'), { kind: 'analyze', ticker: 'TSLA' });
     assert.deepEqual(parseCommand('/analyze'), { kind: 'analyze-menu' });
     assert.deepEqual(parseCommand('/analyze !!'), { kind: 'analyze-usage' });
+    assert.deepEqual(parseCommand('/analyze tsla opus'), { kind: 'analyze', ticker: 'TSLA', opus: true });
+    assert.deepEqual(parseCommand('/exit opus'), { kind: 'exit', opus: true });
+    assert.deepEqual(parseCommand('/exit now'), { kind: 'exit' });
     assert.deepEqual(parseCommand('hello'), { kind: 'help' });
     assert.deepEqual(parseCommand('/verify'), { kind: 'verify' });
     assert.deepEqual(parseCommand('/check'), { kind: 'verify' }, '/check is an alias');
@@ -114,7 +117,16 @@ describe('FL-13d — Telegram commands', () => {
       seen.length = 0;
       await post({ callback_query: { id: 'q1', data: 'a:NVDA', message: { chat: { id: 42 } } } });
       assert.ok(seen[0]!.url.endsWith('answerCallbackQuery'));
-      assert.ok(seen[1]!.url.includes('analyze.yml') && seen[1]!.body.inputs.ticker === 'NVDA');
+      // Owner 2026-11-05: a stock button asks Free or + Opus; nothing starts yet.
+      assert.ok(seen[1]!.url.endsWith('sendMessage'));
+      assert.deepEqual(seen[1]!.body.reply_markup.inline_keyboard[0].map((b: any) => b.callback_data), ['g:NVDA', 'o:NVDA']);
+      assert.equal(seen.filter((c) => c.url.includes('/dispatches')).length, 0);
+      seen.length = 0;
+      await post({ callback_query: { id: 'q1g', data: 'g:NVDA', message: { chat: { id: 42 } } } });
+      assert.deepEqual(seen[1]!.body.inputs, { ticker: 'NVDA', ai: 'true', update_sheet: 'true' }, 'free: no opus input (default false)');
+      seen.length = 0;
+      await post({ callback_query: { id: 'q1o', data: 'o:NVDA', message: { chat: { id: 42 } } } });
+      assert.deepEqual(seen[1]!.body.inputs, { ticker: 'NVDA', ai: 'true', update_sheet: 'true', opus: 'true' });
       seen.length = 0;
       await post({ callback_query: { id: 'q2', data: 'a:NVDA', message: { chat: { id: 99 } } } });
       assert.equal(seen.length, 0, 'a button from another chat does nothing');
@@ -124,6 +136,10 @@ describe('FL-13d — Telegram commands', () => {
       seen.length = 0;
       await post({ message: { chat: { id: 42 }, text: 'coin', reply_to_message: { text: ask.text } } });
       assert.ok(seen[0]!.url.includes('analyze.yml') && seen[0]!.body.inputs.ticker === 'COIN');
+      assert.equal(seen[0]!.body.inputs.opus, undefined);
+      seen.length = 0;
+      await post({ message: { chat: { id: 42 }, text: 'coin OPUS', reply_to_message: { text: ask.text } } });
+      assert.deepEqual(seen[0]!.body.inputs, { ticker: 'COIN', ai: 'true', update_sheet: 'true', opus: 'true' });
       seen.length = 0;
       await post({ message: { chat: { id: 42 }, text: 'not a ticker!!', reply_to_message: { text: ask.text } } });
       assert.equal(seen.length, 1);

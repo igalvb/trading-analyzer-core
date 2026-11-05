@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  AI_DISPATCH, AI_EFFORT_OPTIONS, AI_INPUTS, ANALYZE_INPUTS, ALLOWED_ACTIONS, ISRAEL_ZONE, ET_ZONE, MY_OPTIONS, MY_OPTIONS_CRON_EDT,
+  AI_DISPATCH, AI_EFFORT_OPTIONS, AI_INPUTS, ANALYZE_INPUTS, SEND_EXIT_INPUTS, ALLOWED_ACTIONS, ISRAEL_ZONE, ET_ZONE, MY_OPTIONS, MY_OPTIONS_CRON_EDT,
   MY_OPTIONS_CRON_EST, MY_OPTIONS_ET_HOUR, NIGHTLY, NIGHTLY_STEP_ORDER, WORKFLOWS, WORKFLOW_DIR_CANDIDATES,
   cronInstant, cronsThatPassGuard, etHourOf, findSecretLikeText, localClock, parseCron, renderScheduleBlock,
   shouldRunNow, yamlSubsetProblems, MIGRATE_DATA_TABS, MIGRATION_STEPS, MIGRATION_BLOCKED_WINDOWS_UTC, SHEET_WRITER_WORKFLOWS, migrationBlockedWindow,
@@ -310,11 +310,19 @@ describe('FL-8w structure that protects the sheet and the bill', () => {
     assert.match(stepWith(t, 'Check the log for leaked keys'), /for name in .*TELEGRAM_BOT_TOKEN/);
     assert.ok(!AI_INPUTS.some((i) => i.name === 'portfolio_opus'), 'the Exit Opus box drives it');
   });
-  test('analyze: the inputs equal the DATA (opus defaults to true); Opus is skipped only when opus is false; the key is leak-checked', () => {
+  test('analyze: the inputs equal the DATA (opus defaults to false, owner 2026-11-05); Opus is skipped only when opus is false; the key is leak-checked', () => {
     const t = readWorkflow('analyze.yml');
     assert.deepEqual(parseInputs(t), [...ANALYZE_INPUTS, USER_INPUT].map((x) => ({ name: x.name, type: x.type, default: x.default })));
     assert.ok(t.includes('      WITH_OPUS: ${{ inputs.opus }}'));
     assert.match(t, /\[ "\$WITH_OPUS" = "false" \] && args\+=\(--no-opus\)/);
+    assert.ok(!/^\s*if:.*opus/im.test(t), 'no step is switched on or off by the opus input');
+    assert.match(stepWith(t, 'Check the log for leaked keys'), /for name in .*ANTHROPIC_API_KEY/);
+  });
+  test('send-exit (owner 2026-11-05): input opus (default false) re-runs the Exit AI with Opus; the key is leak-checked', () => {
+    const t = readWorkflow('send-exit.yml');
+    assert.deepEqual(parseInputs(t), [...SEND_EXIT_INPUTS, USER_INPUT].map((x) => ({ name: x.name, type: x.type, default: x.default })));
+    assert.ok(t.includes('          WITH_OPUS: ${{ inputs.opus }}'));
+    assert.match(t, /if \[ "\$WITH_OPUS" = "true" \]; then\n\s+BUY=false EXIT=true EXIT_GEMINI=true EXIT_OPUS=true /);
     assert.ok(!/^\s*if:.*opus/im.test(t), 'no step is switched on or off by the opus input');
     assert.match(stepWith(t, 'Check the log for leaked keys'), /for name in .*ANTHROPIC_API_KEY/);
   });

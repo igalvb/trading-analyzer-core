@@ -60,6 +60,15 @@ describe('P6 relay: the owner, unchanged', () => {
       assert.ok(seen.filter((c) => c.url.endsWith('sendMessage')).every((c) => c.body.chat_id === '42'));
     });
     await withFetch(async (seen) => {
+      // Owner 2026-11-05: Opus only on request.
+      await post(BASE, { message: { chat: { id: 42 }, text: '/exit opus' } });
+      await post(BASE, { message: { chat: { id: 42 }, text: '/analyze aapl opus' } });
+      const [e, a] = dispatches(seen);
+      assert.ok(e!.url.includes('send-exit.yml'));
+      assert.deepEqual(e!.body, { ref: 'main', inputs: { opus: 'true' } });
+      assert.deepEqual(a!.body, { ref: 'main', inputs: { ticker: 'AAPL', ai: 'true', update_sheet: 'true', opus: 'true' } });
+    });
+    await withFetch(async (seen) => {
       await timer(BASE, '2026-10-30T03:23:00Z', '23 3 * * *');
       assert.equal(dispatches(seen).length, 1);
       assert.deepEqual(dispatches(seen)[0]!.body, { ref: 'main', inputs: { run_checks: 'false' } });
@@ -75,7 +84,7 @@ describe('P6 relay: the owner, unchanged', () => {
 
 describe('Owner 2026-11-04: /verify (alias /check) starts verify.yml', () => {
   test('the owner: days 3, no user key; u2: with user; the reply; an unknown chat starts nothing; in the help text', async () => {
-    assert.equal(RELAY_VERSION, '2026-11-04.1');
+    assert.ok(RELAY_VERSION >= '2026-11-04.1');
     const env = { ...BASE, USERS };
     await withFetch(async (seen) => {
       await post(env, { message: { chat: { id: 42 }, text: '/verify' } });
@@ -130,11 +139,11 @@ describe('P6 relay: more users (USERS)', () => {
       await post(env, { message: { chat: { id: 77 }, text: '/analyze' } });
       assert.deepEqual(seen[0]!.body.reply_markup.inline_keyboard[0].map((b: any) => b.text), ['AAPL', 'KO'], "u2's own buttons");
       seen.length = 0;
-      await post(env, { callback_query: { id: 'q', data: 'a:KO', message: { chat: { id: 77 } } } });
+      await post(env, { callback_query: { id: 'q', data: 'g:KO', message: { chat: { id: 77 } } } });
       assert.equal(dispatches(seen)[0]!.body.inputs.user, 'u2');
       seen.length = 0;
       await post(env, { message: { chat: { id: 99 }, text: '/exit' } });
-      await post(env, { callback_query: { id: 'q', data: 'a:KO', message: { chat: { id: 99 } } } });
+      await post(env, { callback_query: { id: 'q', data: 'g:KO', message: { chat: { id: 99 } } } });
       assert.equal(seen.length, 0);
     });
   });

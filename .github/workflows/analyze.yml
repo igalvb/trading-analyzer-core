@@ -22,9 +22,9 @@ on:
         type: boolean
         default: true
       opus:
-        description: 'Add a Claude Opus second opinion (needs the AI review on and an Anthropic key)'
+        description: 'Add a Claude Opus second opinion (paid, about $0.15; needs the AI review on and an Anthropic key)'
         type: boolean
-        default: true
+        default: false
       user:
         description: 'User id. owner = you (repo secrets, your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
         type: string
