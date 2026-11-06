@@ -46,6 +46,8 @@ jobs:
     name: Nightly pipeline
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    outputs:
+      ledger: ${{ steps.ledger.outputs.changed }}
     steps:
       - name: Record start time
         run: |
@@ -61,6 +63,13 @@ jobs:
         with:
           ref: prices
           path: long-history
+
+      - name: Check out the ledger (docs/LEDGER.md; read only here; a missing branch is skipped)
+        uses: actions/checkout@v5
+        continue-on-error: true
+        with:
+          ref: data
+          path: data-branch
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -170,6 +179,27 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      - name: Keep the ledger snapshot for the data branch (profile storage.ledger shadow or on only)
+        id: ledger
+        if: ${{ !cancelled() }}
+        run: |
+          # With storage.ledger off the run never touches data-branch/, so nothing is kept and nothing is committed.
+          # ledger/prices.json: the Nightly's crypto prices (profile ledger.cryptoPrices on), written with the snapshot.
+          if [ -e data-branch/.git ] && [ -n "$(git -C data-branch status --porcelain -- ledger/snapshots.jsonl ledger/prices.json)" ]; then
+            echo "changed=yes" >> "$GITHUB_OUTPUT"
+            echo "The ledger snapshot changed; the next job commits it to the data branch."
+          fi
+
+      - name: Upload the ledger snapshot
+        if: ${{ !cancelled() && steps.ledger.outputs.changed == 'yes' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: ledger-${{ github.run_id }}
+          path: |
+            data-branch/ledger/snapshots.jsonl
+            data-branch/ledger/prices.json
+          retention-days: 7
+
       - name: Failure notice
         if: failure() || cancelled()
         run: |
@@ -227,3 +257,38 @@ jobs:
           npm run dashboard-build -- --out out/dashboard
           cd out/dashboard
           npx --yes wrangler@3.99.0 pages deploy . --project-name "$project" --branch main --commit-dirty=true
+
+  # docs/LEDGER.md phase 3: the one job with write access, and only to the separate `data` branch (never main). It runs
+  # only when the Nightly changed ledger/snapshots.jsonl, i.e. only with profile storage.ledger shadow or on.
+  ledger:
+    name: Commit the ledger snapshot to the data branch
+    needs: nightly
+    if: ${{ !cancelled() && needs.nightly.outputs.ledger == 'yes' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the data branch
+        uses: actions/checkout@v5
+        with:
+          ref: data
+          path: data-branch
+
+      - name: Download the ledger snapshot
+        uses: actions/download-artifact@v5
+        with:
+          name: ledger-${{ github.run_id }}
+          path: data-branch/ledger
+
+      - name: Commit to the data branch
+        run: |
+          set -euo pipefail
+          cd data-branch
+          git config user.name "ledger"
+          git config user.email "ledger@users.noreply.github.com"
+          git add ledger/snapshots.jsonl
+          if [ -f ledger/prices.json ]; then git add ledger/prices.json; fi
+          git commit -q -m "Ledger: nightly snapshot $(date '+%Y-%m-%d')" || { echo "Nothing new."; exit 0; }
+          git push -q origin HEAD:data
+          echo "Committed to branch data."

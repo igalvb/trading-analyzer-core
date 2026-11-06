@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Trading Dashboard</title>
+<title>My Assets</title>
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#111b2b" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Trading">
+<meta name="apple-mobile-web-app-title" content="My Assets">
 <meta name="robots" content="noindex, nofollow">
-<link rel="manifest" href="manifest.webmanifest">
+<link rel="manifest" href="manifest.webmanifest" crossorigin="use-credentials">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -20,7 +20,8 @@
 <!--
   The app shell of the phone dashboard (docs/DASHBOARD.md). Static: it is copied as it is by `npm run dashboard-build`
   and reads its data from ./data/dashboard.json (same origin; backend/src/dashboard/data.ts writes it). Every value
-  from the data is escaped before it is shown. The Run buttons POST /api/run (functions/api/run.js).
+  from the data is escaped before it is shown. The Run buttons POST /api/run (functions/api/run.js); the Net worth
+  screen's edits POST /api/edit (functions/api/edit.js), which commits to the ledger on the private data branch.
 -->
 <style>
 :root {
@@ -33,6 +34,8 @@
   --accent: #2456c4;
   --good: #16794a; --warn: #9a5c00; --bad: #bd3426;
   --c2: #7a4db5; --c3: #0d8478; --c4: #b0561a; --c5: #4d6b16;
+  /* net worth groups, fixed order (dataviz validator: all checks pass, light and dark) */
+  --k1: #2456c4; --k2: #b0561a; --k3: #008a7a; --k4: #7a4db5; --k5: #4d6b16; --k6: #2b77a3; --k7: #b23f78; --k8: #9a6a00;
   --font-display: 'IBM Plex Sans', system-ui, sans-serif;
   --font-body: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
@@ -44,6 +47,7 @@
     --bg: #0a111d; --surface: #111b2b; --ink: #e5ebf4; --muted: #94a1b5; --line: #233149; --accent: #6e9bff;
     --good: #45c283; --warn: #e3a43f; --bad: #f06f5e;
     --c2: #b490f2; --c3: #3fc6b7; --c4: #ef9455; --c5: #a4c95a;
+    --k1: #5b8af0; --k2: #d47636; --k3: #1fa898; --k4: #9b78e0; --k5: #7aa036; --k6: #3f9bd0; --k7: #d66aa0; --k8: #b28c36;
     color-scheme: dark;
   }
 }
@@ -51,9 +55,11 @@
   --bg: #0a111d; --surface: #111b2b; --ink: #e5ebf4; --muted: #94a1b5; --line: #233149; --accent: #6e9bff;
   --good: #45c283; --warn: #e3a43f; --bad: #f06f5e;
   --c2: #b490f2; --c3: #3fc6b7; --c4: #ef9455; --c5: #a4c95a;
+  --k1: #5b8af0; --k2: #d47636; --k3: #1fa898; --k4: #9b78e0; --k5: #7aa036; --k6: #3f9bd0; --k7: #d66aa0; --k8: #b28c36;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; overflow-x: hidden; }
 body { background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font-body); -webkit-font-smoothing: antialiased; padding-top: env(safe-area-inset-top); }
 .num, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
@@ -209,8 +215,10 @@ tr.tot td { font-weight: 600; background: color-mix(in srgb, var(--muted) 7%, tr
 .counts { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 12px; margin-top: 8px; }
 
 /* bottom tabs */
-.tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: grid; grid-template-columns: repeat(6, 1fr); background: var(--surface); border-top: 1px solid var(--line); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); }
-.tab { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; border: 0; background: none; font-size: 11px; color: var(--muted); border-radius: 10px; text-decoration: none; }
+.tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: grid; grid-template-columns: repeat(7, 1fr); background: var(--surface); border-top: 1px solid var(--line); padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); }
+.tab { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; border: 0; background: none; font-size: 11px; color: var(--muted); border-radius: 10px; text-decoration: none; min-width: 0; }
+.tab span { white-space: nowrap; letter-spacing: -0.02em; }
+@media (max-width: 420px) { .tab { font-size: 10px; } }
 .tab svg { width: 22px; height: 22px; }
 .tab[aria-current="page"] { color: var(--accent); font-weight: 600; }
 
@@ -264,11 +272,81 @@ tr.tot td { font-weight: 600; background: color-mix(in srgb, var(--muted) 7%, tr
 }
 .sheet .kpi .val { font-size: 15px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* net worth + growth + edits */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: var(--surface); flex: none; }
+.seg button { border: 0; background: none; padding: 6px 12px; font-size: 13px; min-width: 40px; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.seg button[disabled] { opacity: .4; cursor: not-allowed; }
+.nw-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.nwg { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 10px 0 8px; }
+.nwg .top { display: flex; align-items: center; gap: 8px; }
+.nwg .grow { flex: 1; min-width: 0; }
+.nwg .bar { margin-top: 6px; height: 7px; }
+.nwi { display: flex; align-items: center; gap: 10px; padding: 9px 0 9px 18px; width: 100%; text-align: left; background: none; border: 0; border-top: 1px dashed var(--line); }
+.nwi .grow { flex: 1; min-width: 0; }
+.nwi .nm { font-weight: 500; overflow-wrap: anywhere; }
+.nwi .right { text-align: right; flex: none; }
+.stale { color: var(--warn); }
+.chip.stalechip { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.chevron { transition: transform .15s ease; display: inline-block; color: var(--muted); }
+.open .chevron { transform: rotate(90deg); }
+.gchip { display: inline-flex; flex: none; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: var(--surface); }
+.gchip button { border: 0; background: none; padding: 7px 10px 7px 12px; font-size: 13px; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.gchip button.only { padding: 7px 10px; font-size: 11px; color: var(--muted); border-left: 1px solid var(--line); }
+.gchip.on { border-color: var(--ink); }
+.gchip.on button:first-child { background: var(--ink); color: var(--surface); }
+.gchip .sw { margin: 0; }
+.chart-box.tall { height: 270px; }
+.slider { display: grid; grid-template-columns: 44px minmax(0, 1fr) 76px; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.slider input[type=range] { width: 100%; accent-color: var(--accent); }
+.marks { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.mark { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 10px; font-size: 12px; display: inline-flex; gap: 6px; align-items: center; }
+.mark .tri { font-size: 11px; }
+.mark.in .tri { color: var(--good); } .mark.out .tri { color: var(--bad); }
+.mark.sugg { border-style: dashed; }
+.note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.linkbtn { border: 0; background: none; color: var(--accent); padding: 0; font-size: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.btn.sm { min-height: 32px; padding: 4px 10px; font-size: 13px; }
+.fld { display: block; margin-bottom: 12px; }
+.fld > span { display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+.fld input, .fld select, .fld textarea { width: 100%; min-height: 42px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); padding: 8px 12px; font-size: 16px; }
+.fld textarea { min-height: 70px; resize: vertical; }
+.fld.bad input, .fld.bad select { border-color: var(--bad); }
+.fld .err, .err { color: var(--bad); font-size: 12px; display: block; margin-top: 3px; }
+.fld .hint { color: var(--muted); font-size: 12px; display: block; margin-top: 3px; }
+.fld-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
+.sumlist { list-style: none; margin: 0 0 12px; padding: 0; border: 1px solid var(--line); border-radius: 12px; }
+.sumlist li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; border-top: 1px solid var(--line); font-size: 14px; }
+.sumlist li:first-child { border-top: 0; }
+.sumlist li span:first-child { color: var(--muted); }
+.sumlist li span:last-child { text-align: right; overflow-wrap: anywhere; }
+.menu-list button { display: flex; width: 100%; justify-content: space-between; align-items: center; padding: 14px 4px; border: 0; border-top: 1px solid var(--line); background: none; font-weight: 500; text-align: left; }
+.menu-list button:first-child { border-top: 0; }
+.tagchips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+.tagchips button { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 10px; font: 13px var(--font-mono); }
+@media (min-width: 960px) { .chart-box.tall { height: 340px; } #nwKpis { grid-template-columns: repeat(7, minmax(0, 1fr)); } #nwKpis .kpi.hero { grid-column: span 2; } }
+.pie-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-items: center; }
+.pie-row .chart-box { height: 170px; }
+@media (min-width: 600px) { .pie-row { grid-template-columns: 170px minmax(0, 1fr); gap: 14px; } }
+.leg { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.leg li button { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto 46px; gap: 6px; align-items: center; width: 100%; padding: 5px 4px; border: 0; background: none; text-align: left; border-radius: 8px; }
+.leg li button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
+.leg .num { text-align: right; }
+.tot-table { font-size: 13px; }
+.tot-table td, .tot-table th { padding: 7px 4px; }
+.tot-table td:first-child { white-space: normal; min-width: 0; }
+.tot-table td.n { font-size: 12.5px; }
+.tot-table tr.big td { font-weight: 700; border-top: 2px solid var(--line); }
+.ratio { padding: 8px 0; border-top: 1px solid var(--line); }
+.ratio:first-child { border-top: 0; }
+.ratio .bar { margin-top: 6px; height: 8px; }
+.fbar { display: flex; gap: 8px; align-items: center; margin: 0 0 8px; font-size: 13px; }
 </style>
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">Trading<span>·</span>Analyzer</div>
+  <div class="brand">My<span>·</span>Assets</div>
   <button class="status-chip none" id="statusChip" type="button" aria-label="Last Nightly run. Open runs"><i class="dot"></i><span id="statusText">Loading…</span></button>
   <button class="icon-btn" id="searchBtn" type="button" aria-label="Search everything">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
@@ -282,6 +360,46 @@ tr.tot td { font-weight: 600; background: color-mix(in srgb, var(--muted) 7%, tr
 <div class="shell">
   <nav class="sidebar" aria-label="Sections" id="sidebar"></nav>
   <main id="main">
+    <section class="view" id="view-networth" aria-labelledby="h-networth">
+      <div class="view-head"><h2 id="h-networth">Net worth</h2><div class="nw-head"><div class="seg" role="group" aria-label="Currency" id="nwCur"></div><button class="btn sm" type="button" id="nwEdit">+ Add / edit</button></div></div>
+      <div class="kpis" id="nwKpis"></div>
+      <div class="grid two" style="margin-top:12px">
+        <div class="card">
+          <div class="card-head"><h3>Everything you own</h3><span class="muted small" id="nwSub"></span></div>
+          <div id="nwFilt"></div>
+          <ul class="list" id="nwGroups"></ul>
+        </div>
+        <div class="card" id="nwSide">
+          <div class="card-head"><h3>Money in / out</h3><button class="btn sm" type="button" data-edit="flow">+ Add</button></div>
+          <div id="nwPending"></div>
+        </div>
+      </div>
+      <div class="grid halves" style="margin-top:12px">
+        <div class="card">
+          <div class="card-head"><h3>Net worth by group</h3><span class="muted small">tap a slice: only that group</span></div>
+          <div class="pie-row"><div class="chart-box"><canvas id="ch-nwpie" role="img" aria-label="Donut chart: net worth by group (the list beside it has every value)"></canvas></div><ul class="leg" id="nwPieLeg"></ul></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>Portfolio by type</h3><span class="muted small" id="stSub"></span></div>
+          <div class="pie-row"><div class="chart-box"><canvas id="ch-stpie" role="img" aria-label="Donut chart: the market part by type (the list beside it has every value)"></canvas></div><ul class="leg" id="stPieLeg"></ul></div>
+          <div id="stItems"></div>
+        </div>
+      </div>
+      <div class="grid halves" style="margin-top:12px">
+        <div class="card"><div class="card-head"><h3>Totals</h3><span class="muted small" id="totFx"></span></div><div class="scroll-x" id="nwTotals"></div></div>
+        <div class="card" id="ratioCard" hidden><div class="card-head"><h3>Ratio targets</h3><span class="muted small">today vs your target</span></div><div id="nwRatios"></div></div>
+      </div>
+      <div class="card" style="margin-top:12px" id="growthCard">
+        <div class="card-head"><h3>Growth</h3><span class="muted small" id="grSub"></span></div>
+        <div class="filters" role="group" aria-label="Groups in the graph (long-press a group: only that one)" id="grChips"></div>
+        <div class="filters" role="group" aria-label="Graph range and style" id="grOpts"></div>
+        <div class="chart-box tall" id="grBox"><canvas id="ch-growth" role="img" aria-label="Net worth over time, by group, with money in and out marks"></canvas></div>
+        <div id="grSlider"></div>
+        <div class="marks" id="grMarks"></div>
+        <p class="note" id="grNote"></p>
+      </div>
+    </section>
+
     <section class="view" id="view-overview" aria-labelledby="h-overview">
       <div class="view-head"><h2 id="h-overview">Overview</h2><span class="muted small" id="ovSub"></span></div>
       <div class="kpis" id="kpis"></div>
@@ -496,6 +614,7 @@ const ftoggle = (view, key, label) => `<button class="fchip" type="button" aria-
 
 /* ---------- routing / nav ---------- */
 const NAV = [
+  ['networth', 'Net worth', 'M3 11l9-7 9 7M5 9.5V20h14V9.5M10 20v-6h4v6'],
   ['overview', 'Overview', 'M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z'],
   ['portfolio', 'Portfolio', 'M4 6h16v13H4zM9 6V4h6v2'],
   ['exit', 'Exit', 'M14 4h6v16h-6M10 8l-4 4 4 4M6 12h10'],
@@ -515,8 +634,9 @@ function buildNav() {
   $('#moreTab').addEventListener('click', () => openSheet('More', `<div class="more-list">${moreLinks}</div>`));
 }
 function route() {
-  let v = location.hash.replace('#', '') || 'overview';
-  if (!VIEWS.includes(v)) v = 'overview';
+  const home = D && !D.networth ? 'overview' : 'networth';
+  let v = location.hash.replace('#', '') || home;
+  if (!VIEWS.includes(v)) v = home;
   closeSheet(true);
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
   const moreActive = MORE.some(m => m[0] === v) || v === 'more';
@@ -541,7 +661,7 @@ mql.addEventListener && mql.addEventListener('change', () => rerenderAllCharts()
 let lastFocus = null, sheetChart = null;
 function openSheet(title, html, after) {
   lastFocus = document.activeElement;
-  $('#sheetTitle').textContent = title;
+  $('#sheetTitle').textContent = title; $('#sheetTitle').dir = 'auto';
   $('#sheetBody').innerHTML = html;
   $('#sheet').classList.add('open'); $('#scrim').classList.add('open');
   $('#sheet').scrollTop = 0;
@@ -646,7 +766,8 @@ const RENDER = {
     mkChart('alloc', $('#ch-alloc'), { type: 'doughnut', data: { labels: G.map(g => g.label), datasets: [{ data: G.map(g => Math.max(0, g.value)), backgroundColor: G.map(g => tok(colors[g.id] || 'muted')), borderColor: tok('surface'), borderWidth: 2, borderRadius: 4 }] },
       options: { responsive: true, maintainAspectRatio: false, cutout: '68%', animation: reduceMotion ? false : { duration: 400 }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ' ' + c.label + ': ' + fmt$(c.parsed) } } } } });
   },
-  paper() { paperChart('paper', $('#ch-paper')); }
+  paper() { paperChart('paper', $('#ch-paper')); },
+  networth() { nwPies(); growthChart(); }
 };
 function renderCharts() { if (D) (RENDER[current] || (() => {}))(); }
 function rerenderAllCharts() { renderCharts(); if (sheetChart) sheetChart(); }
@@ -1007,12 +1128,501 @@ function searchNow(q) {
   $('#sRes').innerHTML = out.join('') || '<p class="muted small">Nothing found.</p>';
 }
 
+/* ---------- net worth (the ledger on the private data branch; data.networth / data.growth) ---------- */
+const LF = { holdings: 'ledger/holdings.json', assets: 'ledger/assets.json', watchlist: 'ledger/watchlist.json', flows: 'ledger/flows.jsonl' };
+const NG = ['stocks', 'btcFunds', 'crypto', 'calls', 'pension', 'funds', 'realEstate', 'cash'];
+const NG_LABEL = { stocks: 'Stocks', btcFunds: 'Bitcoin funds', crypto: 'Crypto', calls: 'Calls', pension: 'Pension', funds: 'Other funds', realEstate: 'Real estate', cash: 'Cash' };
+const NG_COLOR = { stocks: 'k1', btcFunds: 'k2', crypto: 'k3', calls: 'k4', pension: 'k5', funds: 'k6', realEstate: 'k7', cash: 'k8' };
+const K_TOKENS = ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'];
+const MARKET = ['stocks', 'btcFunds', 'crypto', 'calls'];
+const KIND_SUBTYPE = { stocks: 'Stocks', btcFunds: 'Bitcoin funds', crypto: 'Crypto', calls: 'Options' };
+const KIND_GROUP = { stock: 'stocks', btcFund: 'btcFunds', crypto: 'crypto' };
+const ASSET_GROUPS = [['pension', 'Pension'], ['funds', 'Other savings fund'], ['realEstate', 'Real estate'], ['cash', 'Cash']];
+const STALE_DAYS = 90;
+let nwCur = store.get('nw-cur', 'USD');
+const nwOpen = new Set(store.get('nw-open', []));
+const todayLocal = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+const dayDiff = (a, b) => Math.round((Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 86400000);
+const NW = () => (D && D.networth) || null;
+const fxNow = () => { const N = NW(); return N && N.fx && isNum(N.fx.usdIls) && N.fx.usdIls > 0 ? N.fx.usdIls : null; };
+const cur = () => (nwCur === 'ILS' && fxNow() ? 'ILS' : 'USD');
+const sym = c => (c === 'ILS' ? '₪' : '$');
+const fmtC = (v, c, dp = 0) => !isNum(v) ? '—' : (v < 0 ? '−' : '') + sym(c) + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+const r2 = x => (isNum(x) ? Math.round(x * 100) / 100 : null);
+const inCur = usd => (!isNum(usd) ? null : cur() === 'ILS' ? usd * fxNow() : usd);
+function conv(amount, currency, fx) {
+  if (!isNum(amount)) return [null, null];
+  const ok = isNum(fx) && fx > 0;
+  return currency === 'USD' ? [r2(amount), ok ? r2(amount * fx) : null] : [ok ? r2(amount / fx) : null, r2(amount)];
+}
+/* An item's value in the chosen currency (its own currency when there is no rate). */
+function itemShown(x) { const c = cur(), v = c === 'ILS' ? x.ils : x.usd; return isNum(v) ? [v, c] : [x.net, x.currency]; }
+/* Same arithmetic as src/ledger/networth.ts buildNetWorth, so an edit shows at once (optimistic) with the right totals. */
+function nwRecalc() {
+  const N = NW(); if (!N) return;
+  const fx = fxNow(), today = todayLocal();
+  N.items = N.items.map(x => { const [usd, ils] = conv(x.net, x.currency, fx); const ageDays = x.asOf ? Math.max(0, dayDiff(x.asOf, today)) : null; return Object.assign({}, x, { usd, ils, ageDays, stale: ageDays != null && ageDays > STALE_DAYS }); });
+  N.groups = NG.map(id => {
+    const xs = N.items.filter(x => x.group === id), pr = xs.filter(x => isNum(x.usd)), usd = r2(pr.reduce((s, x) => s + x.usd, 0)) || 0, re = id === 'realEstate';
+    return { id, label: NG_LABEL[id], count: xs.length, usd, ils: fx ? r2(usd * fx) : null, grossUsd: re ? r2(xs.reduce((s, x) => s + (conv(x.value, x.currency, fx)[0] || 0), 0)) : null, debtUsd: re ? r2(xs.reduce((s, x) => s + (conv(x.debt, x.currency, fx)[0] || 0), 0)) : null, unpriced: xs.length - pr.length, stale: xs.filter(x => x.stale).length };
+  }).filter(g => g.count > 0);
+  const usd = r2(N.groups.reduce((s, g) => s + g.usd, 0)) || 0;
+  N.total = { usd, ils: fx ? r2(usd * fx) : null, unpriced: N.groups.reduce((s, g) => s + g.unpriced, 0) };
+  const by = {};
+  N.items.filter(x => MARKET.includes(x.group)).forEach(x => { const k = x.subType || KIND_SUBTYPE[x.group]; const t = by[k] || (by[k] = { name: k, count: 0, usd: 0 }); t.count++; t.usd += x.usd || 0; });
+  const mk = Object.values(by).reduce((s, t) => s + Math.max(0, t.usd), 0) || 1;
+  N.subTypes = Object.values(by).map(t => ({ name: t.name, count: t.count, usd: r2(t.usd), share: r2(Math.max(0, t.usd) / mk * 100) })).sort((a, b) => b.usd - a.usd || a.name.localeCompare(b.name));
+  const gU = ids => r2(N.groups.filter(g => ids.includes(g.id)).reduce((s, g) => s + g.usd, 0)) || 0, re = N.groups.find(g => g.id === 'realEstate');
+  const T = { portfolio: gU(MARKET), pension: gU(['pension']), funds: gU(['funds']), realEstate: r2(re ? re.grossUsd || 0 : 0), debt: r2(re ? -(re.debtUsd || 0) : 0), total: usd };
+  N.totals = Object.assign({}, T, { ils: fx ? Object.fromEntries(Object.entries(T).map(([k, v]) => [k, r2(v * fx)])) : null });
+  const pp = {};
+  N.items.forEach(x => { if (x.person && isNum(x.usd)) { const p = pp[x.person] || (pp[x.person] = { name: x.person, count: 0, usd: 0 }); p.count++; p.usd += x.usd; } });
+  N.persons = Object.values(pp).map(p => ({ name: p.name, count: p.count, usd: r2(p.usd), ils: fx ? r2(p.usd * fx) : null })).sort((a, b) => b.usd - a.usd);
+}
+let nwFilter = null, stFilter = null;
+/* Sub-type colors follow the name (sorted), never the rank; past eight names: "Other" in gray. */
+function stColors(list) { const names = list.map(t => t.name).slice().sort(); const m = {}; names.forEach((n, i) => { m[n] = i < 8 ? K_TOKENS[i] : 'muted'; }); return m; }
+function renderTotals() {
+  const N = NW(), T = N && N.totals; if (!T) { $('#nwTotals').innerHTML = ''; return; }
+  const I = T.ils, fx = fxNow();
+  const rows = [['Portfolio (stocks, crypto, calls)', 'portfolio'], ['Pension', 'pension'], ['Study and savings funds', 'funds'], ['Real estate (value)', 'realEstate'], ['Debt (mortgages)', 'debt']];
+  const cash = N.groups.find(g => g.id === 'cash');
+  $('#totFx').textContent = fx ? 'USD/ILS ' + fx.toFixed(3) : 'no USD/ILS rate yet';
+  $('#nwTotals').innerHTML = `<table class="tot-table"><thead><tr><th></th><th class="n">$</th><th class="n">₪</th></tr></thead><tbody>${rows.map(([l, k]) => `<tr><td>${esc(l)}</td><td class="n ${T[k] < 0 ? 'down' : ''}">${fmtC(T[k], 'USD')}</td><td class="n ${T[k] < 0 ? 'down' : ''}">${I ? fmtC(I[k], 'ILS') : '—'}</td></tr>`).join('')}
+    ${cash ? `<tr><td>Cash</td><td class="n">${fmtC(cash.usd, 'USD')}</td><td class="n">${fmtC(cash.ils, 'ILS')}</td></tr>` : ''}
+    <tr class="big"><td>Total savings with assets</td><td class="n">${fmtC(T.total, 'USD')}</td><td class="n">${I ? fmtC(I.total, 'ILS') : '—'}</td></tr>
+    ${N.persons && N.persons.length ? `<tr class="group-row"><td colspan="3">By person (pension, funds, property)</td></tr>` + N.persons.map(p => `<tr><td><span dir="auto">${esc(p.name)}</span> <span class="muted small">(${p.count})</span></td><td class="n">${fmtC(p.usd, 'USD')}</td><td class="n">${fmtC(p.ils, 'ILS')}</td></tr>`).join('') : ''}</tbody></table>`;
+}
+const ratioTxt = v => (!isNum(v) ? '—' : Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(3));
+function renderRatios() {
+  const N = NW(), R = N && N.ratios;
+  $('#ratioCard').hidden = !(R && R.length);
+  if (!R || !R.length) { $('#nwRatios').innerHTML = ''; return; }
+  $('#nwRatios').innerHTML = R.map(r => `<div class="ratio"><div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><b dir="auto">${esc(r.name)}</b><span class="num ${isNum(r.pctOfTarget) && r.pctOfTarget >= 100 ? 'up' : ''}">${isNum(r.pctOfTarget) ? r.pctOfTarget.toFixed(1) + '% of target' : 'no price'}</span></div>
+    <div class="bar" role="img" aria-label="${isNum(r.pctOfTarget) ? r.pctOfTarget.toFixed(0) + ' percent of the target' : 'not known'}"><i style="width:${isNum(r.pctOfTarget) ? Math.min(100, Math.max(0, r.pctOfTarget)) : 0}%;background:var(--accent)"></i></div>
+    <div class="muted small num" style="margin-top:3px">now ${ratioTxt(r.current)} · target ${ratioTxt(r.target)}</div></div>`).join('');
+}
+function renderPieLegends() {
+  const N = NW(); if (!N) { $('#nwPieLeg').innerHTML = ''; $('#stPieLeg').innerHTML = ''; $('#stItems').innerHTML = ''; return; }
+  const c = cur(), pos = N.groups.reduce((s, g) => s + Math.max(0, g.usd), 0) || 1;
+  $('#nwPieLeg').innerHTML = N.groups.map(g => `<li><button type="button" data-nwpie="${g.id}" aria-pressed="${nwFilter === g.id}"><i class="sw" style="background:var(--${NG_COLOR[g.id]})"></i><span class="clip">${esc(g.label)}</span><span class="num">${fmtC(c === 'ILS' ? g.ils : g.usd, c)}</span><span class="num muted">${(Math.max(0, g.usd) / pos * 100).toFixed(1)}%</span></button></li>`).join('');
+  const ST = N.subTypes || [], col = stColors(ST);
+  $('#stSub').textContent = ST.length ? fmtC(inCur(ST.reduce((s, t) => s + t.usd, 0)), c) : '';
+  $('#stPieLeg').innerHTML = ST.length ? ST.map(t => `<li><button type="button" data-stpie="${esc(t.name)}" aria-pressed="${stFilter === t.name}"><i class="sw" style="background:var(--${col[t.name]})"></i><span class="clip" dir="auto">${esc(t.name)}</span><span class="num">${fmtC(inCur(t.usd), c)}</span><span class="num muted">${isNum(t.share) ? t.share.toFixed(1) : '—'}%</span></button></li>`).join('') : `<li class="muted small">No stocks, crypto or calls yet.</li>`;
+  const xs = stFilter ? N.items.map((x, i) => [x, i]).filter(([x]) => MARKET.includes(x.group) && (x.subType || KIND_SUBTYPE[x.group]) === stFilter) : [];
+  $('#stItems').innerHTML = stFilter ? `<div class="fbar" style="margin-top:10px"><span class="grow">Showing <b dir="auto">${esc(stFilter)}</b> (${xs.length})</span><button class="linkbtn" type="button" data-stpie="">Show all</button></div>` + xs.map(([x, i]) => nwItemRow(x, i)).join('') : '';
+}
+function nwPies() {
+  const N = NW(); if (!N) { destroyChart('nwpie'); destroyChart('stpie'); return; }
+  const c = cur(), pieOpts = (labels, vals, onPick) => ({ responsive: true, maintainAspectRatio: false, cutout: '62%', animation: reduceMotion ? false : { duration: 300 },
+    plugins: { legend: { display: false }, tooltip: { callbacks: { label: t => ' ' + labels[t.dataIndex] + ': ' + fmtC(vals[t.dataIndex], c) } } },
+    onClick: (evt, els) => { if (els && els[0]) onPick(els[0].index); } });
+  const G = N.groups.filter(g => g.usd > 0), gv = G.map(g => (c === 'ILS' ? g.ils : g.usd));
+  mkChart('nwpie', $('#ch-nwpie'), { type: 'doughnut', data: { labels: G.map(g => g.label), datasets: [{ data: gv, backgroundColor: G.map(g => alpha(tok(NG_COLOR[g.id]), !nwFilter || nwFilter === g.id ? 1 : 0.25)), borderColor: tok('surface'), borderWidth: 2, borderRadius: 4, hoverOffset: 4 }] },
+    options: pieOpts(G.map(g => g.label), gv, i => { const id = G[i].id; nwFilter = nwFilter === id ? null : id; if (nwFilter) nwOpen.add(nwFilter); renderNetworth(); nwPies(); }) });
+  const ST = (N.subTypes || []).filter(t => t.usd > 0), col = stColors(N.subTypes || []), sv = ST.map(t => inCur(t.usd));
+  mkChart('stpie', $('#ch-stpie'), { type: 'doughnut', data: { labels: ST.map(t => t.name), datasets: [{ data: sv, backgroundColor: ST.map(t => alpha(tok(col[t.name]), !stFilter || stFilter === t.name ? 1 : 0.25)), borderColor: tok('surface'), borderWidth: 2, borderRadius: 4, hoverOffset: 4 }] },
+    options: pieOpts(ST.map(t => t.name), sv, i => { const n = ST[i].name; stFilter = stFilter === n ? null : n; renderPieLegends(); nwPies(); }) });
+}
+function sourceTxt(x) { return x.source === 'live' ? 'live price' : x.source === 'report' ? 'Exit report price' : x.source === 'sheet' ? 'sheet price' : x.source === 'manual' ? 'your price' : x.source === 'nightly' ? 'the Nightly\'s price' : x.source === 'estimate' ? 'estimate until the next run' : 'no price yet'; }
+function nwItemRow(x, i) {
+  const [v, vc] = itemShown(x);
+  const when = x.asOf ? `<span class="small ${x.stale ? 'stale' : 'muted'}"${x.stale ? ' title="Older than 90 days: update it"' : ''}>${x.stale ? '⚠ ' : ''}${fmtDay(x.asOf)}</span>` : `<span class="small muted">${esc(sourceTxt(x))}</span>`;
+  return `<button class="nwi" type="button" data-nwitem="${i}"><span class="grow"><span class="nm" dir="auto">${esc(x.name)}</span>${x.pending ? ' <span class="chip info">saved</span>' : ''}${x.sub ? `<br><span class="muted small" dir="auto">${esc(x.sub)}</span>` : ''}</span><span class="right"><span class="num">${fmtC(v, vc)}</span><br>${when}</span></button>`;
+}
+function renderNetworth() {
+  const N = NW(), c = cur(), fx = fxNow();
+  $('#nwCur').innerHTML = [['USD', '$'], ['ILS', '₪']].map(([k, l]) => `<button type="button" data-nwcur="${k}" aria-pressed="${c === k}" aria-label="Show in ${k === 'USD' ? 'dollars' : 'shekels'}"${k === 'ILS' && !fx ? ' disabled title="No USD/ILS rate yet"' : ''}>${l}</button>`).join('');
+  $('#nwEdit').hidden = !N;
+  renderPending();
+  if (!N) {
+    $('#nwKpis').innerHTML = `<div class="kpi hero">${empty('No ledger yet. When your holdings move to the ledger (the private data branch), this screen shows everything you own: stocks, crypto, calls, pension, funds, real estate and cash.')}</div>`;
+    $('#nwGroups').innerHTML = ''; $('#nwSub').textContent = ''; $('#nwFilt').innerHTML = ''; renderTotals(); renderRatios(); renderPieLegends(); renderGrowthControls(); return;
+  }
+  const T = N.total, tot = c === 'ILS' ? T.ils : T.usd, oc = c === 'ILS' ? 'USD' : 'ILS', other = c === 'ILS' ? T.usd : T.ils;
+  const sumG = ids => N.groups.filter(g => ids.includes(g.id)).reduce((s, g) => s + g.usd, 0);
+  const stale = N.items.filter(x => x.stale).length;
+  const kp = [
+    ['Net worth', fmtC(tot, c), '', 'hero', `<span class="muted num small">${isNum(other) ? fmtC(other, oc) + ' · ' : ''}USD/ILS ${fx ? fx.toFixed(3) : '—'}${N.fx && N.fx.date ? ' (' + fmtDay(N.fx.date) + ')' : ''}</span>`],
+    ['Markets', fmtC(inCur(sumG(['stocks', 'btcFunds', 'crypto', 'calls'])), c), ''], ['Pension & funds', fmtC(inCur(sumG(['pension', 'funds'])), c), ''],
+    ['Real estate, net', fmtC(inCur(sumG(['realEstate'])), c), ''], ['Cash', fmtC(inCur(sumG(['cash'])), c), ''],
+    ['Values to update', String(stale), stale ? 'stalek' : 'up', 'last', `<span class="muted small">older than ${STALE_DAYS} days</span>`]
+  ];
+  $('#nwKpis').innerHTML = kp.map(([l, v, k, x, sub]) => `<div class="kpi ${x || ''}"><div class="label">${esc(l)}</div><div class="val ${k === 'stalek' ? 'stale' : k}">${v}</div>${sub || ''}</div>`).join('');
+  $('#nwSub').textContent = N.items.length + ' items' + (T.unpriced ? ' · ' + T.unpriced + ' not priced' : '');
+  const pos = N.groups.reduce((s, g) => s + Math.max(0, g.usd), 0) || 1, maxV = Math.max(1, ...N.groups.map(g => Math.max(0, g.usd)));
+  $('#nwFilt').innerHTML = nwFilter ? `<div class="fbar"><span class="grow">Showing <b>${esc(NG_LABEL[nwFilter])}</b> only</span><button class="linkbtn" type="button" data-nwpie="${nwFilter}">Show all</button></div>` : '';
+  $('#nwGroups').innerHTML = N.groups.filter(g => !nwFilter || g.id === nwFilter).map(g => {
+    const open = nwOpen.has(g.id), v = c === 'ILS' ? g.ils : g.usd, col = NG_COLOR[g.id] || 'muted';
+    const items = N.items.map((x, i) => [x, i]).filter(([x]) => x.group === g.id).sort((a, b) => (b[0].usd || 0) - (a[0].usd || 0));
+    return `<li class="${open ? 'open' : ''}"><button class="nwg" type="button" data-nwg="${g.id}" aria-expanded="${open}"><div class="top"><i class="sw" style="background:var(--${col})"></i><span class="grow"><b>${esc(g.label)}</b> <span class="muted small">(${g.count})</span>${g.stale ? ` <span class="chip stalechip">${g.stale} to update</span>` : ''}</span><span class="num">${fmtC(v, c)}</span><span class="num muted small" style="width:46px;text-align:right">${(Math.max(0, g.usd) / pos * 100).toFixed(1)}%</span><span class="chevron" aria-hidden="true">›</span></div>
+      <div class="bar" aria-hidden="true"><i style="width:${(Math.max(0, g.usd) / maxV * 100).toFixed(1)}%;background:var(--${col})"></i></div>${g.id === 'realEstate' && isNum(g.debtUsd) && g.debtUsd > 0 ? `<div class="muted small num" style="margin-top:4px">value ${fmtC(inCur(g.grossUsd), c)} − mortgage ${fmtC(inCur(g.debtUsd), c)}</div>` : ''}</button>${open ? items.map(([x, i]) => nwItemRow(x, i)).join('') : ''}</li>`;
+  }).join('') + (nwFilter ? '' : `<li><div class="row" style="font-weight:600"><span class="grow">Total</span><span class="num">${fmtC(tot, c)}</span></div></li>`);
+  renderTotals(); renderRatios(); renderPieLegends();
+  renderGrowthControls();
+}
+function openNwItem(i) {
+  const N = NW(), x = N && N.items[i]; if (!x) return;
+  const [v, vc] = itemShown(x), oc = x.currency === 'USD' ? 'ILS' : 'USD', ov = x.currency === 'USD' ? x.ils : x.usd;
+  const facts = [[x.group === 'realEstate' ? 'Net value' : 'Value', fmtC(v, vc)], ['In ' + (oc === 'ILS' ? 'shekels' : 'dollars'), fmtC(ov, oc)]];
+  if (x.group === 'realEstate') facts.push(['Property value', fmtC(x.value, x.currency)], ['Mortgage left', fmtC(x.debt, x.currency)]);
+  if (isNum(x.qty)) facts.push([x.group === 'calls' ? 'Contracts' : 'Quantity', qtyTxt(x.qty)]);
+  if (isNum(x.cost)) facts.push(['Cost', fmtC(x.cost, x.currency)]);
+  facts.push(['Last updated', x.asOf ? (x.stale ? `<span class="stale">⚠ ${fmtDay(x.asOf)} · ${x.ageDays} days ago</span>` : fmtDay(x.asOf)) : esc(sourceTxt(x))]);
+  if (x.raw && x.raw.bought) facts.push(['Bought', fmtDay(x.raw.bought)]);
+  const holding = x.ref && x.ref.file === LF.holdings, asset = x.ref && x.ref.file === LF.assets;
+  const btns = holding ? `<button class="btn primary" type="button" data-edit="change" data-i="${i}">Change</button><button class="btn" type="button" data-edit="sell" data-i="${i}">Sell</button><button class="btn" type="button" data-edit="remove" data-i="${i}">Remove</button>`
+    : asset ? `<button class="btn primary" type="button" data-edit="update" data-i="${i}">Update value</button><button class="btn" type="button" data-edit="change" data-i="${i}">Change details</button><button class="btn" type="button" data-edit="remove" data-i="${i}">Remove</button>` : '';
+  openSheet(x.name, `<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap"><span class="chip neutral">${esc(NG_LABEL[x.group] || x.group)}</span><span class="chip neutral">${esc(x.currency)}</span>${x.sub ? `<span class="small muted" dir="auto">${esc(x.sub)}</span>` : ''}</div>
+    <div class="facts">${facts.map(([k, val]) => `<div><div class="k">${esc(k)}</div><div class="num">${val}</div></div>`).join('')}</div>
+    ${x.raw && x.raw.note ? `<p class="small" dir="auto" style="margin:0 0 10px">${esc(x.raw.note)}</p>` : ''}
+    ${x.stale ? `<p class="small stale" style="margin:0 0 10px">This value is older than ${STALE_DAYS} days. Tap Update value when you have a new statement.</p>` : ''}
+    ${btns ? `<div class="btn-row" style="margin-top:6px">${btns}</div>` : '<p class="muted small">From the Portfolio sheet: not editable here until the ledger has your holdings.</p>'}`);
+}
+function flowAmt(f, c) { c = c || cur(); const v = c === 'ILS' ? f.ils : f.usd; if (isNum(v)) return v; const fx = fxNow(); return f.currency === c ? f.amount : fx ? (c === 'ILS' ? f.amount * fx : f.amount / fx) : null; }
+function flowBtn(f) {
+  const c = cur(), a = flowAmt(f), shown = isNum(a) ? fmtC(a, c) : fmtC(f.amount, f.currency), inn = f.amount > 0;
+  return `<button class="row" type="button" data-flow="${esc(f.id)}" style="flex:1;min-width:0"><span class="${inn ? 'up' : 'down'}" aria-hidden="true">${f.suggested ? (inn ? '△' : '▽') : inn ? '▲' : '▼'}</span><span class="grow"><b class="num">${inn ? '+' : ''}${shown}</b> <span class="small">${inn ? 'in' : 'out'} · ${esc(NG_LABEL[f.group] || f.group)}</span>${f.pending ? ' <span class="chip info">saved</span>' : ''}<br><span class="muted small">${fmtDay(f.date)}${f.note ? ` · <span dir="auto">${esc(f.note)}</span>` : ''}</span></span></button>`;
+}
+function renderPending() {
+  const G = D && D.growth, fl = G ? G.flows : [], N = NW();
+  const sug = fl.filter(f => f.suggested), recent = fl.filter(f => !f.suggested).slice(-4).reverse();
+  let h = '';
+  if (sug.length) h += `<div class="ghead"><span>Waiting for you (${sug.length})</span></div><ul class="list">` + sug.map(f => `<li><div style="display:flex;gap:6px;align-items:center">${flowBtn(f)}<button class="btn sm" type="button" data-edit="confirm" data-flow="${esc(f.id)}">Confirm</button><button class="btn sm" type="button" data-edit="dismiss" data-flow="${esc(f.id)}">Dismiss</button></div></li>`).join('') + '</ul>';
+  if (recent.length) h += `<div class="ghead"><span>Recent</span></div><ul class="list">` + recent.map(f => `<li>${flowBtn(f)}</li>`).join('') + '</ul>';
+  if (!fl.length) h += '<p class="muted small" style="margin:0">No money in or out yet. Add one when you deposit or withdraw: the graph marks it, and the "without deposits" line leaves it out.</p>';
+  if (N) h += `<div class="ghead" style="margin-top:14px"><span>Buy watchlist</span><button class="linkbtn" type="button" data-edit="watchlist">Edit</button></div><p class="small num" style="margin:0">${N.watchlist ? N.watchlist.length + ' tickers: ' + esc(N.watchlist.slice(0, 12).join(', ')) + (N.watchlist.length > 12 ? ' …' : '') : 'not in the ledger yet'}</p>`;
+  $('#nwPending').innerHTML = h;
+}
+function openFlow(id) {
+  const G = D && D.growth, f = G && G.flows.find(x => x.id === id); if (!f) return;
+  const N = NW(), it = N && f.itemId ? N.items.find(x => x.ref && x.ref.id === f.itemId) : null, a = flowAmt(f);
+  const facts = [['Date', fmtDay(f.date)], ['Amount', `<span class="${f.amount > 0 ? 'up' : 'down'}">${f.amount > 0 ? '+' : ''}${fmtC(f.amount, f.currency)}</span>`], ['In ' + (cur() === 'ILS' ? 'shekels' : 'dollars'), isNum(a) ? fmtC(a, cur()) : '—'], ['Group', esc(NG_LABEL[f.group] || f.group)], ['Item', it ? `<span dir="auto">${esc(it.name)}</span>` : '—'], ['Status', f.suggested ? 'suggested by a run' : f.source === 'confirmed' ? 'confirmed' : f.source === 'migration' ? 'from the migration' : 'typed by you']];
+  openSheet((f.amount > 0 ? 'Money in' : 'Money out'), `<div class="facts">${facts.map(([k, v]) => `<div><div class="k">${esc(k)}</div><div class="num">${v}</div></div>`).join('')}</div>${f.note ? `<p class="small" dir="auto">${esc(f.note)}</p>` : ''}
+    ${f.suggested ? `<p class="small muted">A run saw this change and suggests it was money in or out (shown hollow). Confirm it to count it in "without deposits", or dismiss it.</p><div class="btn-row"><button class="btn primary" type="button" data-edit="confirm" data-flow="${esc(f.id)}">Confirm</button><button class="btn" type="button" data-edit="dismiss" data-flow="${esc(f.id)}">Dismiss</button></div>` : ''}`);
+}
+
+/* ---------- the growth graph ---------- */
+/* growth-math:start (a copy of withoutFlows in src/ledger/networth.ts; test/dashboard.networth.test.ts holds them equal) */
+function withoutFlows(days, values, flows) {
+  const start = days[0];
+  const sorted = flows.filter(f => start != null && f.date > start && Number.isFinite(f.amount)).slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const out = [];
+  let k = 0, cum = 0;
+  for (let i = 0; i < days.length; i++) {
+    const d = days[i];
+    while (k < sorted.length && sorted[k].date <= d) { cum += sorted[k].amount; k++; }
+    const v = values[i];
+    out.push(v == null || !Number.isFinite(v) ? null : Math.round((v - cum) * 100) / 100);
+  }
+  return out;
+}
+/* growth-math:end */
+const GR = Object.assign({ groups: NG.slice(), mode: 'stack', range: 'All' }, store.get('gr', {}));
+GR.groups = (Array.isArray(GR.groups) ? GR.groups : []).filter(g => NG.includes(g)); if (!GR.groups.length) GR.groups = NG.slice();
+let grWin = null, grPress = null, grLong = false, grFlowsShown = [];
+const saveGR = () => store.set('gr', { groups: GR.groups, mode: GR.mode, range: GR.range });
+function grDays() { return D && D.growth ? D.growth.snapshots.map(s => s.date) : []; }
+function grWindow(days) {
+  const n = days.length; if (n < 2) return [0, n - 1];
+  if (grWin && grWin[1] < n && grWin[0] < grWin[1]) return grWin;
+  const last = days[n - 1], back = k => new Date(Date.parse(last + 'T12:00:00Z') - k * 86400000).toISOString().slice(0, 10);
+  const from = { '1M': back(30), '3M': back(91), 'YTD': last.slice(0, 4) + '-01-01', '1Y': back(365), '5Y': back(1826) }[GR.range] || days[0];
+  let a = days.findIndex(d => d >= from); if (a < 0 || a > n - 2) a = Math.max(0, n - 2);
+  return [a, n - 1];
+}
+function renderGrowthControls() {
+  const all = GR.groups.length === NG.length;
+  $('#grChips').innerHTML = `<button class="fchip" type="button" data-grall="1" aria-pressed="${all}">All</button>` + NG.map(g => { const on = GR.groups.includes(g); return `<span class="gchip ${on ? 'on' : ''}"><button type="button" data-grg="${g}" aria-pressed="${on}"><i class="sw" style="background:var(--${NG_COLOR[g]})"></i>${esc(NG_LABEL[g])}</button><button class="only" type="button" data-gronly="${g}" aria-label="Only ${esc(NG_LABEL[g])}">only</button></span>`; }).join('');
+  $('#grOpts').innerHTML = ['1M', '3M', 'YTD', '1Y', '5Y', 'All'].map(r => `<button class="fchip" type="button" data-grrange="${r}" aria-pressed="${GR.range === r && !grWin}">${r}</button>`).join('') + `<span class="seg" role="group" aria-label="Graph style" style="margin-left:4px"><button type="button" data-grmode="stack" aria-pressed="${GR.mode === 'stack'}">Stacked</button><button type="button" data-grmode="lines" aria-pressed="${GR.mode === 'lines'}">Lines</button></span>`;
+  const days = grDays(), n = days.length;
+  if (n > 2) {
+    const [a, b] = grWindow(days);
+    $('#grSlider').innerHTML = `<div class="slider"><label for="grA">From</label><input type="range" id="grA" min="0" max="${n - 1}" step="1" value="${a}"><span class="num" id="grAt">${fmtDay(days[a])}</span></div><div class="slider"><label for="grB">To</label><input type="range" id="grB" min="0" max="${n - 1}" step="1" value="${b}"><span class="num" id="grBt">${fmtDay(days[b])}</span></div>`;
+    const onSlide = () => { let x = +$('#grA').value, y = +$('#grB').value; if (x >= y) { if (document.activeElement === $('#grA')) x = Math.max(0, y - 1); else y = Math.min(n - 1, x + 1); $('#grA').value = x; $('#grB').value = y; } grWin = [x, y]; $('#grAt').textContent = fmtDay(days[x]); $('#grBt').textContent = fmtDay(days[y]); document.querySelectorAll('[data-grrange]').forEach(el => el.setAttribute('aria-pressed', 'false')); growthChart(); };
+    $('#grA').addEventListener('input', onSlide); $('#grB').addEventListener('input', onSlide);
+  } else $('#grSlider').innerHTML = '';
+}
+function growthChart() {
+  const box = $('#grBox'), G = D && D.growth, S = G ? G.snapshots : [], c = cur();
+  if (!G || S.length < 2) {
+    destroyChart('growth');
+    const start = (G && G.start) || (NW() && NW().ledgerUpdated) || todayLocal();
+    box.innerHTML = `<div class="chart-fallback" style="text-align:center;padding:0 18px;line-height:1.5">📈 The graph starts filling from ${esc(fmtDay(start))}.<br>One point is added every night${S.length ? ' (1 so far)' : ''}; the line appears from the second.</div>`;
+    $('#grMarks').innerHTML = ''; $('#grNote').innerHTML = ''; $('#grSub').textContent = ''; return;
+  }
+  if (!$('#ch-growth')) box.innerHTML = '<canvas id="ch-growth" role="img" aria-label="Net worth over time, by group, with money in and out marks"></canvas>';
+  const days = S.map(s => s.date), [a, b] = grWindow(days), dd = days.slice(a, b + 1);
+  let fx = null; const fxs = S.map(s => { if (isNum(s.fx)) fx = s.fx; return fx; }), fx0 = fxs.find(isNum) || fxNow();
+  const k = i => (c === 'ILS' ? (fxs[i] || fx0) : 1);
+  const sel = NG.filter(g => GR.groups.includes(g));
+  const per = sel.map(g => dd.map((_, j) => { const v = S[a + j].usd[g]; return isNum(v) ? r2(v * k(a + j)) : 0; }));
+  const total = dd.map((_, j) => r2(per.reduce((s, arr) => s + (arr[j] || 0), 0)));
+  const flows = (G.flows || []).filter(f => sel.includes(f.group) && f.date >= dd[0] && f.date <= dd[dd.length - 1]).map(f => { let j = dd.findIndex(d => d >= f.date); if (j < 0) j = dd.length - 1; return { f, j, amt: flowAmt(f, c) }; }).filter(x => isNum(x.amt));
+  grFlowsShown = flows;
+  const nd = withoutFlows(dd, total, flows.filter(x => !x.f.suggested).map(x => ({ date: x.f.date, amount: x.amt })));
+  const ds = [];
+  if (GR.mode === 'stack') sel.forEach((g, i) => { const col = tok(NG_COLOR[g]); ds.push({ label: NG_LABEL[g], data: per[i], borderColor: col, backgroundColor: alpha(col, 0.3), fill: i === 0 ? 'origin' : '-1', stack: 'groups', borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 3, tension: 0.2 }); });
+  else {
+    ds.push(lineDs(sel.length === NG.length ? 'Total' : 'Selected total', total, tok('ink'), { stack: 'total', borderWidth: 2.4 }));
+    if (sel.length > 1) sel.forEach((g, i) => ds.push(lineDs(NG_LABEL[g], per[i], tok(NG_COLOR[g]), { stack: 'g-' + g, borderWidth: 1.4, pointRadius: 0 })));
+  }
+  ds.push({ label: 'Without deposits', data: nd, borderColor: tok('ink'), backgroundColor: tok('ink'), borderDash: [5, 4], borderWidth: 1.6, pointRadius: 0, pointHoverRadius: 3, fill: false, stack: 'nd', tension: 0.2 });
+  const mi = ds.length;
+  ds.push({ label: 'Money in / out', type: 'line', showLine: false, stack: 'marks', fill: false, data: flows.map(x => ({ x: dd[x.j], y: total[x.j] })), pointStyle: 'triangle', pointRotation: flows.map(x => (x.amt >= 0 ? 0 : 180)), pointRadius: 8, pointHoverRadius: 10, pointHitRadius: 16,
+    pointBackgroundColor: flows.map(x => (x.f.suggested ? tok('surface') : tok(x.amt >= 0 ? 'good' : 'bad'))), pointBorderColor: flows.map(x => tok(x.amt >= 0 ? 'good' : 'bad')), pointBorderWidth: 2 });
+  const o = baseOpts();
+  o.plugins.legend.display = false;
+  o.scales.y.stacked = GR.mode === 'stack';
+  const span = dayDiff(dd[0], dd[dd.length - 1]);
+  o.scales.x.ticks.callback = v => { const d = dd[v]; if (!d) return ''; const t = String(fmtDay(d)).split(' '); return span > 330 ? t[1] + ' ' + t[2] : t[0] + ' ' + t[1]; };
+  o.scales.x.ticks.maxTicksLimit = innerWidth < 600 ? 4 : 7;
+  o.scales.y.ticks.callback = v => (Math.abs(v) >= 1e6 ? sym(c) + (v / 1e6).toFixed(Math.abs(v) >= 1e7 ? 0 : 1) + 'M' : sym(c) + Math.round(v / 1000) + 'k');
+  o.plugins.tooltip.filter = it => it.datasetIndex !== mi;
+  o.plugins.tooltip.callbacks = {
+    title: items => (items[0] ? fmtDay(dd[items[0].dataIndex]) : ''),
+    label: t => ' ' + t.dataset.label + ': ' + fmtC(t.parsed.y, c),
+    footer: items => { if (!items[0]) return ''; const j = items[0].dataIndex, hits = flows.filter(x => x.j === j); return (GR.mode === 'stack' ? 'Total ' + fmtC(total[j], c) : '') + hits.map(x => '\n' + (x.amt >= 0 ? '▲ in ' : '▼ out ') + fmtC(x.amt, c) + (x.f.suggested ? ' (suggested)' : '')).join(''); }
+  };
+  o.onClick = (evt, _els, chart) => { const hit = chart.getElementsAtEventForMode(evt, 'point', { intersect: true }, false).find(e => e.datasetIndex === mi); if (hit && flows[hit.index]) openFlow(flows[hit.index].f.id); };
+  mkChart('growth', $('#ch-growth'), { type: 'line', data: { labels: dd, datasets: ds }, options: o });
+  const first = total[0], last = total[total.length - 1], g = isNum(first) && first ? (last / first - 1) * 100 : null, ndg = isNum(first) && first && isNum(nd[nd.length - 1]) ? (nd[nd.length - 1] / first - 1) * 100 : null;
+  $('#grSub').innerHTML = `<span class="num">${fmtC(last, c)}</span> · <span class="${cls(g)}">${pct(g)}</span> · without deposits <span class="${cls(ndg)}">${pct(ndg)}</span>`;
+  $('#grMarks').innerHTML = flows.slice(-8).reverse().map(x => `<button class="mark ${x.amt >= 0 ? 'in' : 'out'} ${x.f.suggested ? 'sugg' : ''}" type="button" data-flow="${esc(x.f.id)}"><span class="tri" aria-hidden="true">${x.f.suggested ? (x.amt >= 0 ? '△' : '▽') : x.amt >= 0 ? '▲' : '▼'}</span><span class="num">${x.amt >= 0 ? '+' : ''}${fmtC(x.amt, c)}</span><span class="muted">${shortDay(x.f.date)} · ${esc(NG_LABEL[x.f.group])}${x.f.suggested ? ' · suggested' : ''}</span></button>`).join('');
+  const legend = (GR.mode === 'stack' ? sel.map(g => `<span><i class="sw" style="background:var(--${NG_COLOR[g]})"></i>${esc(NG_LABEL[g])}</span>`) : [`<span><i class="sw" style="background:var(--ink)"></i>${sel.length === NG.length ? 'Total' : 'Selected total'}</span>`, ...(sel.length > 1 ? sel.map(g => `<span><i class="sw" style="background:var(--${NG_COLOR[g]})"></i>${esc(NG_LABEL[g])}</span>`) : [])]).join('') + '<span>┄ without deposits</span>';
+  $('#grNote').innerHTML = `<span class="legend-inline" style="margin-bottom:6px">${legend}</span><b>▲</b> money in, <b>▼</b> out (hollow = suggested, not yet confirmed). Dashed line: <b>growth without deposits</b> = the value minus the money put in (plus what was taken out) since the first day shown. <button class="linkbtn" type="button" data-grinfo="1">How it is counted</button>`;
+}
+function openGrowthInfo() {
+  openSheet('Growth without deposits', `<p>The dashed line is the value of the groups you picked <b>minus the net money you put in</b> since the first day on the graph:</p>
+    <p class="num small" style="background:color-mix(in srgb,var(--muted) 9%,transparent);padding:10px;border-radius:10px">without deposits (day) = value (day) − sum of money in / out after the first day, up to that day</p>
+    <p class="small">So a deposit lifts the value but not this line, and money you take out does not pull it down. What is left is what the markets (and your value updates) did. Both lines start at the same point on the first day shown; change the range and they start again from there.</p>
+    <p class="small muted">A money in/out line counts on its own day (that night's snapshot already holds it). Suggested lines (hollow marks) do not count until you confirm them. In ₪, a dollar amount is turned into shekels at the rate of its day.</p>`);
+}
+
+/* ---------- edits: form -> confirm sheet -> POST /api/edit ---------- */
+const TICKER_RE = /^[A-Z0-9.^-]{1,12}$/;
+const tomorrowLocal = () => { const d = new Date(Date.now() + 86400000); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+let lastForm = null;
+function fieldHtml(f, raw) {
+  const val = raw != null ? raw : '', id = 'fe-' + f.k;
+  let ctl;
+  if (f.type === 'select') ctl = `<select id="${id}" name="${f.k}">${f.options.map(([ov, ol]) => `<option value="${esc(ov)}"${String(val) === String(ov) ? ' selected' : ''}>${esc(ol)}</option>`).join('')}</select>`;
+  else if (f.type === 'textarea') ctl = `<textarea id="${id}" name="${f.k}" dir="auto" maxlength="${f.max || 300}">${esc(val)}</textarea>`;
+  else ctl = `<input id="${id}" name="${f.k}" ${f.type === 'number' ? 'type="text" inputmode="decimal"' : f.type === 'date' ? 'type="date"' : 'type="text" dir="auto"'}${f.upper ? ' autocapitalize="characters" style="text-transform:uppercase"' : ''} maxlength="${f.max || 40}" value="${esc(val)}" autocomplete="off" spellcheck="false">`;
+  return `<label class="fld" data-fld="${f.k}"><span>${esc(f.label)}${f.req ? '' : ' <span class="muted">(optional)</span>'}</span>${ctl}${f.hint ? `<small class="hint">${esc(f.hint)}</small>` : ''}<small class="err" id="err-${f.k}"></small></label>`;
+}
+function readField(f, raw) {
+  const t = String(raw == null ? '' : raw).trim();
+  if (f.type === 'number') return t === '' ? null : Number(t.replace(/[,\s]/g, ''));
+  if (f.upper) return t.toUpperCase();
+  return t === '' ? null : t;
+}
+function fieldError(f, v) {
+  if (v == null || v === '') return f.req ? 'Required.' : null;
+  if (f.type === 'number') {
+    if (!isNum(v)) return 'Type a number.';
+    if (f.gt != null && v <= f.gt) return 'Must be more than ' + f.gt + '.';
+    if (f.min != null && v < f.min) return 'Must be at least ' + f.min + '.';
+    if (f.maxv != null && v > f.maxv) return 'Must be at most ' + f.maxv + '.';
+    if (f.int && !Number.isInteger(v)) return 'A whole number.';
+  }
+  if (f.ticker && !TICKER_RE.test(v)) return 'A ticker: letters, digits, . ^ - (12 at most).';
+  if (f.type === 'date' && (!/^\d{4}-\d{2}-\d{2}$/.test(v) || isNaN(Date.parse(v + 'T12:00:00Z')))) return 'A date.';
+  if (f.type === 'date' && f.past && v > tomorrowLocal()) return 'This date is in the future.';
+  if (typeof v === 'string' && f.max && v.length > f.max) return 'Too long (' + f.max + ' at most).';
+  return null;
+}
+function openForm(spec, raws) {
+  raws = raws || spec.defaults || {};
+  lastForm = { spec, raws };
+  openSheet(spec.title, `<form id="edForm" novalidate>${spec.intro ? `<p class="small muted" style="margin:0 0 10px">${esc(spec.intro)}</p>` : ''}${spec.fields.map(f => fieldHtml(f, raws[f.k])).join('')}<p class="err" id="edErr" role="alert"></p><div class="btn-row" style="margin-top:6px"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Review</button></div></form>`);
+  const sync = () => spec.fields.forEach(f => { if (!f.showIf) return; const [k, v] = f.showIf.split('='), el = $('#fe-' + k); $(`[data-fld="${f.k}"]`).hidden = !(el && v.split('|').includes(el.value)); });
+  sync();
+  $('#edForm').addEventListener('change', sync);
+  $('#edForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const now = {}, vals = {}; let bad = null;
+    spec.fields.forEach(f => {
+      const el = $('#fe-' + f.k), box = $(`[data-fld="${f.k}"]`); now[f.k] = el.value;
+      if (box.hidden) { vals[f.k] = null; return; }
+      const v = readField(f, el.value), err = fieldError(f, v);
+      vals[f.k] = v; $('#err-' + f.k).textContent = err || ''; box.classList.toggle('bad', !!err);
+      if (err && !bad) bad = el;
+    });
+    lastForm = { spec, raws: now };
+    if (bad) { bad.focus(); $('#edErr').textContent = 'Check the marked fields.'; return; }
+    const r = spec.build(vals);
+    if (r.error) { $('#edErr').textContent = r.error; return; }
+    r.fromForm = true; confirmEdit(r);
+  });
+}
+function confirmEdit(r) {
+  openSheet(r.title || 'Check and save', `<p style="margin:0 0 10px"><b>This saves to your ledger:</b></p><ul class="sumlist">${r.summary.map(([k, v, rtl]) => `<li><span>${esc(k)}</span><span${rtl ? ' dir="auto"' : ''}>${esc(v)}</span></li>`).join('')}</ul>
+    <p class="muted small" style="margin:0 0 12px">One commit on your private data branch (${esc(r.file)}) with a line in ledger/edits.jsonl. The numbers here update at once; the dashboard shows it for real after the next run.</p>
+    <p class="err" id="edSaveErr" role="alert"></p><div class="btn-row"><button class="btn" type="button" id="edBack">${r.fromForm ? 'Back' : 'Cancel'}</button><button class="btn primary" type="button" id="edSave" autofocus>Save</button></div>`);
+  $('#edBack').addEventListener('click', () => (r.fromForm && lastForm ? openForm(lastForm.spec, lastForm.raws) : closeSheet()));
+  $('#edSave').addEventListener('click', e => saveEdit(r, e.currentTarget));
+}
+async function saveEdit(r, btn) {
+  btn.disabled = true; btn.textContent = 'Saving…';
+  let j;
+  try {
+    const res = await fetch('./api/edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ kind: r.kind, file: r.file, item: r.item }) });
+    j = await res.json().catch(() => ({ ok: false, message: 'No answer (status ' + res.status + ').' }));
+  } catch (err) { j = { ok: false, message: 'Not saved (offline?). Nothing was changed.' }; }
+  if (!j.ok) { $('#edSaveErr').textContent = '✗ ' + (j.message || 'Not saved.'); btn.disabled = false; btn.textContent = 'Try again'; return; }
+  closeSheet(); toast(j.message || 'Saved ✓ — the dashboard updates after the next run.');
+  applyLocal(r, j);
+}
+function itemFromRaw(raw, file, old) {
+  const ref = { file, id: raw.id };
+  if (file === LF.assets) { const debt = isNum(raw.debt) ? raw.debt : null; return { id: raw.id, group: raw.group, name: raw.name, sub: raw.provider || null, currency: raw.currency, value: raw.value, debt, net: r2(raw.value - (debt || 0)), asOf: raw.asOf, source: 'static', qty: null, cost: null, ref, raw, pending: true, subType: null, person: raw.person || null }; }
+  const unit = old && isNum(old.value) && isNum(old.qty) && old.qty ? old.value / old.qty : null;
+  if (raw.side) { const v = unit != null ? r2(unit * raw.contracts) : null; return { id: raw.id, group: 'calls', name: raw.ticker + ' ' + raw.strike + (raw.side === 'put' ? 'P' : 'C') + ' ' + raw.expiry, sub: qtyTxt(raw.contracts) + (raw.contracts === 1 ? ' contract' : ' contracts'), currency: 'USD', value: v, debt: null, net: v, asOf: null, source: v != null ? 'estimate' : null, qty: raw.contracts, cost: isNum(raw.avgPremium) ? r2(raw.avgPremium * 100 * raw.contracts) : null, ref, raw, pending: true, subType: 'Options', person: null }; }
+  const group = KIND_GROUP[raw.kind] || 'stocks', N = NW();
+  const twin = N ? N.items.find(x => x.raw && !x.raw.side && x.raw.ticker === raw.ticker && isNum(x.value) && x.qty) : null;
+  const p = isNum(raw.manualPrice) ? raw.manualPrice : unit != null ? unit : twin ? twin.value / twin.qty : null, v = p != null ? r2(p * raw.qty) : null;
+  return { id: raw.id, group, name: raw.ticker, sub: qtyTxt(raw.qty) + (group === 'crypto' ? ' units' : ' shares'), currency: raw.currency, value: v, debt: null, net: v, asOf: null, source: isNum(raw.manualPrice) ? 'manual' : v != null ? 'estimate' : null, qty: raw.qty, cost: isNum(raw.avgCost) ? r2(raw.avgCost * raw.qty) : null, ref, raw, pending: true, subType: raw.subType || (old && old.subType) || KIND_SUBTYPE[group], person: null };
+}
+/* The page's own copy of the change, until the next run rebuilds data/dashboard.json from the ledger. */
+function applyLocal(r, j) {
+  const N = NW(), after = j.after;
+  if (r.file === LF.flows) {
+    if (!D.growth) D.growth = { snapshots: [], flows: [], start: null };
+    const FL = D.growth.flows;
+    if (r.item.op === 'add' && after) { const [usd, ils] = conv(after.amount, after.currency, fxNow()); FL.push({ id: after.id, date: after.date, group: after.group, itemId: after.itemId || null, amount: after.amount, currency: after.currency, usd, ils, note: after.note || null, source: 'owner', suggested: false, pending: true }); FL.sort((x, y) => x.date.localeCompare(y.date)); }
+    else { const k = FL.findIndex(f => f.id === r.item.id); if (k >= 0) { if (r.item.op === 'dismiss') FL.splice(k, 1); else FL[k] = Object.assign({}, FL[k], { source: 'confirmed', suggested: false, pending: true }); } }
+  } else if (r.file === LF.watchlist) { if (N) N.watchlist = r.item.tickers.slice(); }
+  else if (N) {
+    const id = r.item.id || j.itemId, at = N.items.findIndex(x => x.ref && x.ref.id === id), old = at >= 0 ? N.items[at] : null;
+    if (r.kind === 'remove') { if (at >= 0) N.items.splice(at, 1); }
+    else if (r.kind === 'sell') { const rem = after && after.holding; if (at >= 0) { if (rem) N.items[at] = itemFromRaw(rem, r.file, old); else N.items.splice(at, 1); } }
+    else if (after) { const it = itemFromRaw(after, r.file, old); if (at >= 0) N.items[at] = it; else N.items.push(it); nwOpen.add(it.group); }
+    nwRecalc();
+  }
+  renderNetworth(); if (current === 'networth') renderCharts();
+}
+const rawOf = raw => { const o = {}; Object.keys(raw || {}).forEach(k => { const v = raw[k]; o[k] = v == null ? '' : String(v); }); return o; };
+const nOrNull = v => (isNum(v) ? v : null);
+const opt = (k, v) => (v != null && v !== '' ? { [k]: v } : {});
+const curSel = (k = 'currency') => ({ k, label: 'Currency', type: 'select', req: true, options: [['USD', '$ USD'], ['ILS', '₪ ILS']] });
+const noteF = { k: 'note', label: 'Note', type: 'textarea', max: 300 };
+function stockSpec(x) {
+  return {
+    title: x ? 'Change ' + x.ticker : 'Add a stock, bitcoin fund or coin', defaults: { kind: 'stock', currency: 'USD' },
+    fields: [{ k: 'ticker', label: 'Ticker', type: 'text', req: true, upper: true, ticker: true, max: 12 }, { k: 'kind', label: 'Type', type: 'select', req: true, options: [['stock', 'Stock or ETF'], ['btcFund', 'Bitcoin fund (spot ETF)'], ['crypto', 'Crypto coin']] },
+      { k: 'qty', label: 'Quantity (shares or units)', type: 'number', req: true, gt: 0 }, { k: 'avgCost', label: 'Average cost per unit', type: 'number', min: 0 }, curSel(),
+      { k: 'bought', label: 'Bought on', type: 'date', past: true }, { k: 'manualPrice', label: 'Your price per unit', type: 'number', min: 0, hint: 'Only for a coin or a holding no data source prices. Empty: the runs price it.' }, { k: 'subType', label: 'Sub-type (your own group for the pie)', type: 'text', max: 40 }, noteF],
+    build: v => {
+      const item = Object.assign({ type: 'stock' }, x ? { id: x.id } : {}, { ticker: v.ticker, kind: v.kind, qty: v.qty, avgCost: nOrNull(v.avgCost), currency: v.currency, bought: v.bought || null }, opt('manualPrice', v.manualPrice), opt('note', v.note), opt('subType', v.subType));
+      return { kind: x ? 'change' : 'add', file: LF.holdings, item, title: x ? 'Change holding' : 'Add holding', summary: [['What', (x ? 'Change ' : 'Add ') + v.ticker], ['Type', { stock: 'Stock or ETF', btcFund: 'Bitcoin fund', crypto: 'Crypto' }[v.kind]], ['Quantity', qtyTxt(v.qty)], ['Average cost', isNum(v.avgCost) ? fmtC(v.avgCost, v.currency, 2) : '—'], ['Bought', v.bought ? fmtDay(v.bought) : '—'], ...(isNum(v.manualPrice) ? [['Your price', fmtC(v.manualPrice, v.currency, 2)]] : []), ...(v.subType ? [['Sub-type', v.subType, true]] : []), ...(v.note ? [['Note', v.note, true]] : [])] };
+    }
+  };
+}
+function optionSpec(x) {
+  return {
+    title: x ? 'Change ' + x.ticker + ' ' + x.strike + (x.side === 'put' ? 'P' : 'C') : 'Add a call', defaults: { side: 'call' },
+    fields: [{ k: 'ticker', label: 'Stock ticker', type: 'text', req: true, upper: true, ticker: true, max: 12 }, { k: 'side', label: 'Type', type: 'select', req: true, options: [['call', 'Call']] },
+      { k: 'contracts', label: 'Contracts', type: 'number', req: true, gt: 0, int: true }, { k: 'strike', label: 'Strike', type: 'number', req: true, gt: 0 }, { k: 'expiry', label: 'Expiry', type: 'date', req: true },
+      { k: 'avgPremium', label: 'Premium paid per share', type: 'number', min: 0, hint: '×100 per contract (the price you see in the broker).' }, { k: 'bought', label: 'Bought on', type: 'date', past: true }, noteF],
+    build: v => {
+      const item = Object.assign({ type: 'option' }, x ? { id: x.id } : {}, { ticker: v.ticker, side: v.side, contracts: v.contracts, strike: v.strike, expiry: v.expiry, avgPremium: nOrNull(v.avgPremium), bought: v.bought || null }, opt('note', v.note));
+      return { kind: x ? 'change' : 'add', file: LF.holdings, item, title: x ? 'Change option' : 'Add option', summary: [['What', (x ? 'Change ' : 'Add ') + v.ticker + ' ' + v.strike + (v.side === 'put' ? 'P' : 'C')], ['Contracts', String(v.contracts)], ['Expiry', fmtDay(v.expiry)], ['Premium paid', isNum(v.avgPremium) ? fmtC(v.avgPremium, 'USD', 2) + ' a share (' + fmtC(v.avgPremium * 100 * v.contracts, 'USD') + ')' : '—'], ['Bought', v.bought ? fmtDay(v.bought) : '—'], ...(v.note ? [['Note', v.note, true]] : [])] };
+    }
+  };
+}
+function sellSpec(it) {
+  const x = it.raw, isOpt = !!x.side, held = isOpt ? x.contracts : x.qty, c = isOpt ? 'USD' : x.currency;
+  return {
+    title: 'Sell ' + it.name, intro: 'You hold ' + qtyTxt(held) + (isOpt ? ' contracts.' : '.') + ' Selling all of it removes the holding; the sale goes to History.',
+    fields: [{ k: 'qty', label: isOpt ? 'Contracts sold' : 'Quantity sold', type: 'number', req: true, gt: 0, maxv: held, int: isOpt }, { k: 'price', label: isOpt ? 'Price per share (×100 per contract)' : 'Price per unit', type: 'number', req: true, min: 0 }, { k: 'sold', label: 'Sold on', type: 'date', req: true, past: true }, noteF],
+    build: v => {
+      const proceeds = v.price * v.qty * (isOpt ? 100 : 1), unit = isOpt ? x.avgPremium : x.avgCost, cost = isNum(unit) ? unit * v.qty * (isOpt ? 100 : 1) : null;
+      return { kind: 'sell', file: LF.holdings, item: Object.assign({ id: x.id, qty: v.qty, price: v.price, sold: v.sold }, opt('note', v.note)), title: 'Sell', summary: [['Sell', qtyTxt(v.qty) + ' of ' + it.name], ['Price', fmtC(v.price, c, 2) + (isOpt ? ' a share' : '')], ['Proceeds', fmtC(proceeds, c)], ['Gain', isNum(cost) ? fmtC(proceeds - cost, c) : '—'], ['Left after', held - v.qty > 1e-9 ? qtyTxt(r2(held - v.qty)) : 'none (removed)'], ['Sold on', fmtDay(v.sold)]] };
+    }
+  };
+}
+function assetSpec(x, group, update) {
+  const isRe = g => g === 'realEstate';
+  return {
+    title: update ? 'Update ' + x.name : x ? 'Change ' + x.name : 'Add a fund, property or cash', defaults: { group: group || 'pension', currency: 'ILS', asOf: todayLocal() },
+    intro: update ? 'Type the value from your latest statement and its date.' : null,
+    fields: [{ k: 'group', label: 'Group', type: 'select', req: true, options: ASSET_GROUPS }, { k: 'name', label: 'Name (as you write it)', type: 'text', req: true, max: 80 }, { k: 'provider', label: 'Provider / track', type: 'text', max: 80 }, { k: 'person', label: 'Whose (for the per-person totals)', type: 'text', max: 40 },
+      { k: 'value', label: 'Value', type: 'number', req: true, min: 0, hint: 'Real estate: the property value; the mortgage goes below.' }, { k: 'debt', label: 'Mortgage left', type: 'number', min: 0, showIf: 'group=realEstate' }, curSel(),
+      { k: 'asOf', label: 'Value as of', type: 'date', req: true, past: true }, noteF],
+    build: v => {
+      const item = Object.assign(x ? { id: x.id } : {}, { group: v.group, name: v.name, value: v.value }, opt('provider', v.provider), isRe(v.group) ? { debt: nOrNull(v.debt) } : {}, { currency: v.currency, asOf: v.asOf }, opt('note', v.note), opt('person', v.person));
+      const net = v.value - (isRe(v.group) && isNum(v.debt) ? v.debt : 0);
+      return { kind: x ? 'change' : 'add', file: LF.assets, item, title: update ? 'Update value' : x ? 'Change item' : 'Add item', summary: [['What', v.name, true], ['Group', NG_LABEL[v.group]], ...(v.provider ? [['Provider', v.provider, true]] : []), ...(v.person ? [['Whose', v.person, true]] : []), ['Value', fmtC(v.value, v.currency)], ...(isRe(v.group) ? [['Mortgage left', isNum(v.debt) ? fmtC(v.debt, v.currency) : '—'], ['Net', fmtC(net, v.currency)]] : []), ...(x && isNum(x.value) ? [['Was', fmtC(x.value, x.currency) + ' (' + fmtDay(x.asOf) + ')']] : []), ['As of', fmtDay(v.asOf)], ...(v.note ? [['Note', v.note, true]] : [])] };
+    }
+  };
+}
+function flowSpec() {
+  const N = NW(), items = N ? N.items.filter(x => x.ref) : [];
+  return {
+    title: 'Money in / out', intro: 'A deposit or a withdrawal: the graph marks it, and "growth without deposits" leaves it out.', defaults: { dir: 'in', currency: 'ILS', date: todayLocal(), group: 'pension', itemId: '' },
+    fields: [{ k: 'dir', label: 'Direction', type: 'select', req: true, options: [['in', '▲ Money in (deposit)'], ['out', '▼ Money out (withdrawal)']] }, { k: 'amount', label: 'Amount', type: 'number', req: true, gt: 0 }, curSel(),
+      { k: 'date', label: 'Date', type: 'date', req: true, past: true }, { k: 'group', label: 'Group', type: 'select', req: true, options: NG.map(g => [g, NG_LABEL[g]]) },
+      { k: 'itemId', label: 'Item', type: 'select', options: [['', '— none —'], ...items.map(x => [x.ref.id, NG_LABEL[x.group] + ': ' + x.name])] }, noteF],
+    build: v => {
+      const it = v.itemId ? items.find(x => x.ref.id === v.itemId) : null;
+      if (it && it.group !== v.group) return { error: 'That item is in ' + NG_LABEL[it.group] + ', not ' + NG_LABEL[v.group] + '.' };
+      const amount = v.dir === 'out' ? -v.amount : v.amount;
+      return { kind: 'flow', file: LF.flows, item: Object.assign({ op: 'add', date: v.date, group: v.group }, it ? { itemId: it.ref.id } : {}, { amount, currency: v.currency }, opt('note', v.note)), title: 'Money in / out', summary: [['What', v.dir === 'out' ? '▼ Money out' : '▲ Money in'], ['Amount', fmtC(v.amount, v.currency)], ['Date', fmtDay(v.date)], ['Group', NG_LABEL[v.group]], ...(it ? [['Item', it.name, true]] : []), ...(v.note ? [['Note', v.note, true]] : [])] };
+    }
+  };
+}
+let wlDraft = [];
+function openWatchlist(keep) {
+  const N = NW(); if (!keep) wlDraft = (N && N.watchlist ? N.watchlist : []).slice();
+  openSheet('Buy watchlist', `<p class="small muted" style="margin:0 0 6px">The candidates the Buy report ranks. Tap a ticker to take it off.</p><div class="tagchips" id="wlChips">${wlDraft.map((t, i) => `<button type="button" data-wl="${i}" aria-label="Remove ${esc(t)}">${esc(t)} ✕</button>`).join('') || '<span class="muted small">empty</span>'}</div>
+    <form class="search" id="wlForm"><label class="sr-only" for="wlIn">Add a ticker</label><input id="wlIn" placeholder="Add a ticker" autocapitalize="characters" maxlength="12" autocomplete="off"><button class="btn" type="submit">Add</button></form><p class="err" id="wlErr"></p>
+    <div class="btn-row" style="margin-top:12px"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="button" id="wlReview">Review</button></div>`);
+  $('#wlChips').addEventListener('click', e => { const b = e.target.closest('[data-wl]'); if (!b) return; wlDraft.splice(+b.dataset.wl, 1); openWatchlist(true); });
+  $('#wlForm').addEventListener('submit', e => { e.preventDefault(); const t = $('#wlIn').value.trim().toUpperCase(); if (!TICKER_RE.test(t)) { $('#wlErr').textContent = 'A ticker: letters, digits, . ^ - (12 at most).'; return; } if (wlDraft.includes(t)) { $('#wlErr').textContent = t + ' is already on the list.'; return; } if (wlDraft.length >= 200) { $('#wlErr').textContent = '200 tickers at most.'; return; } wlDraft.push(t); openWatchlist(true); setTimeout(() => $('#wlIn') && $('#wlIn').focus(), 40); });
+  $('#wlReview').addEventListener('click', () => {
+    const before = N && N.watchlist ? N.watchlist : [], added = wlDraft.filter(t => !before.includes(t)), removed = before.filter(t => !wlDraft.includes(t));
+    confirmEdit({ kind: 'watchlist', file: LF.watchlist, item: { tickers: wlDraft.slice() }, title: 'Save the watchlist', summary: [['Tickers', String(wlDraft.length)], ['Added', added.join(', ') || '—'], ['Taken off', removed.join(', ') || '—']] });
+  });
+}
+function openEditMenu() {
+  openSheet('Add or edit', `<div class="menu-list">${[['stock', 'Add a stock, bitcoin fund or coin'], ['option', 'Add a call'], ['asset', 'Add a pension, fund, property or cash'], ['flow', 'Money in / out'], ['watchlist', 'Edit the watchlist']].map(([k, l]) => `<button type="button" data-edit="${k}">${esc(l)}<span class="muted" aria-hidden="true">›</span></button>`).join('')}</div><p class="muted small">To change, sell, update or remove something: tap it in its group.</p>`);
+}
+function doEdit(what, el) {
+  const N = NW(), i = el.dataset.i != null ? +el.dataset.i : -1, x = N && i >= 0 ? N.items[i] : null;
+  const fl = el.dataset.flow && D.growth ? D.growth.flows.find(f => f.id === el.dataset.flow) : null;
+  if (what === 'menu') openEditMenu();
+  else if (what === 'stock') openForm(stockSpec(null));
+  else if (what === 'option') openForm(optionSpec(null));
+  else if (what === 'asset') openForm(assetSpec(null, el.dataset.group));
+  else if (what === 'flow') openForm(flowSpec());
+  else if (what === 'watchlist') openWatchlist();
+  else if (what === 'change' && x && x.raw) openForm(x.ref.file === LF.assets ? assetSpec(x.raw) : x.raw.side ? optionSpec(x.raw) : stockSpec(x.raw), Object.assign({ type: x.raw.side ? 'option' : 'stock' }, rawOf(x.raw)));
+  else if (what === 'update' && x && x.raw) openForm(assetSpec(x.raw, null, true), Object.assign(rawOf(x.raw), { asOf: todayLocal() }));
+  else if (what === 'sell' && x && x.raw) openForm(sellSpec(x), { qty: String(x.qty), sold: todayLocal() });
+  else if (what === 'remove' && x && x.ref) { const [v, vc] = itemShown(x); confirmEdit({ kind: 'remove', file: x.ref.file, item: { id: x.ref.id }, title: 'Remove', summary: [['Remove', x.name, true], ['Group', NG_LABEL[x.group]], ['Value now', fmtC(v, vc)], ['Note', x.ref.file === LF.holdings ? 'Selling? Use Sell instead, so it shows in History.' : 'It leaves the net worth from now on.']] }); }
+  else if ((what === 'confirm' || what === 'dismiss') && fl) { const a = fl.amount; confirmEdit({ kind: 'flow', file: LF.flows, item: { op: what, id: fl.id }, title: what === 'confirm' ? 'Confirm money in / out' : 'Dismiss the suggestion', summary: [[what === 'confirm' ? 'Confirm' : 'Dismiss', (a > 0 ? '▲ in ' : '▼ out ') + fmtC(Math.abs(a), fl.currency)], ['Date', fmtDay(fl.date)], ['Group', NG_LABEL[fl.group]], ['Then', what === 'confirm' ? 'it counts in "without deposits"' : 'the mark goes away']] }); }
+}
+
 /* ---------- events ---------- */
 function renderView(v) { ({ pf: renderPortfolio, ex: renderExit, buy: renderBuy, pp: renderPaper, hi: renderHistory, run: renderRuns, idea: renderIdeas }[v] || (() => {}))(); }
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-hold],[data-acct],[data-run],[data-analyze],[data-fv],[data-close],[data-week],[data-hist],[data-sort],[data-sortdir],[data-goanalyze],[data-gomodels],[data-goideas]');
+  const el = e.target.closest('[data-hold],[data-acct],[data-run],[data-analyze],[data-fv],[data-close],[data-week],[data-hist],[data-sort],[data-sortdir],[data-goanalyze],[data-gomodels],[data-goideas],[data-nwcur],[data-nwg],[data-nwitem],[data-edit],[data-flow],[data-grall],[data-grg],[data-gronly],[data-grrange],[data-grmode],[data-grinfo],[data-nwpie],[data-stpie]');
   if (!el || el.tagName === 'SELECT') return;
-  if (el.dataset.hold != null) openHolding(+el.dataset.hold);
+  if (el.dataset.edit) doEdit(el.dataset.edit, el);
+  else if (el.dataset.nwcur) { nwCur = el.dataset.nwcur; store.set('nw-cur', nwCur); renderNetworth(); if (current === 'networth') renderCharts(); }
+  else if (el.dataset.nwg) { const g = el.dataset.nwg; nwOpen.has(g) ? nwOpen.delete(g) : nwOpen.add(g); store.set('nw-open', [...nwOpen]); renderNetworth(); }
+  else if (el.dataset.nwitem != null) openNwItem(+el.dataset.nwitem);
+  else if (el.dataset.flow) openFlow(el.dataset.flow);
+  else if (el.dataset.grall) { GR.groups = NG.slice(); saveGR(); renderGrowthControls(); growthChart(); }
+  else if (el.dataset.grg) { if (grLong) { grLong = false; return; } const g = el.dataset.grg; if (GR.groups.includes(g)) { if (GR.groups.length > 1) GR.groups = GR.groups.filter(x => x !== g); } else GR.groups = NG.filter(x => x === g || GR.groups.includes(x)); saveGR(); renderGrowthControls(); growthChart(); }
+  else if (el.dataset.gronly) { GR.groups = [el.dataset.gronly]; saveGR(); renderGrowthControls(); growthChart(); }
+  else if (el.dataset.grrange) { GR.range = el.dataset.grrange; grWin = null; saveGR(); renderGrowthControls(); growthChart(); }
+  else if (el.dataset.grmode) { GR.mode = el.dataset.grmode; saveGR(); renderGrowthControls(); growthChart(); }
+  else if (el.dataset.grinfo) openGrowthInfo();
+  else if (el.dataset.nwpie != null) { const g = el.dataset.nwpie; nwFilter = nwFilter === g ? null : g; if (nwFilter) nwOpen.add(nwFilter); renderNetworth(); nwPies(); }
+  else if (el.dataset.stpie != null) { const n = el.dataset.stpie; stFilter = !n || stFilter === n ? null : n; renderPieLegends(); nwPies(); }
+  else if (el.dataset.hold != null) openHolding(+el.dataset.hold);
   else if (el.dataset.acct != null) openAccount(+el.dataset.acct);
   else if (el.dataset.hist != null) openHistory(+el.dataset.hist);
   else if (el.dataset.week != null) openWeek(+el.dataset.week);
@@ -1043,6 +1653,11 @@ document.addEventListener('keydown', e => {
     else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
   }
 });
+/* Long-press a group chip of the graph: only that group. */
+document.addEventListener('pointerdown', e => { const el = e.target.closest('[data-grg]'); if (!el) return; clearTimeout(grPress); grLong = false; grPress = setTimeout(() => { grLong = true; GR.groups = [el.dataset.grg]; saveGR(); renderGrowthControls(); growthChart(); toast('Only ' + NG_LABEL[el.dataset.grg]); }, 550); });
+['pointerup', 'pointercancel', 'pointerleave'].forEach(t => document.addEventListener(t, () => clearTimeout(grPress), true));
+document.addEventListener('contextmenu', e => { if (e.target.closest('[data-grg]')) e.preventDefault(); });
+$('#nwEdit').addEventListener('click', openEditMenu);
 $('#scrim').addEventListener('click', () => closeSheet());
 $('#sheetClose').addEventListener('click', () => closeSheet());
 $('#themeBtn').addEventListener('click', () => setTheme(effectiveDark() ? 'light' : 'dark'));
@@ -1055,7 +1670,7 @@ window.addEventListener('hashchange', route);
 if (window.Chart) { Chart.defaults.font.family = "'IBM Plex Sans', system-ui, sans-serif"; }
 buildNav();
 function renderAll() {
-  renderStatus(); renderAsOf(); renderOverview(); renderPortfolio(); renderExit(); renderBuy(); renderPaper(); renderIdeas(); renderHistory();
+  nwRecalc(); renderStatus(); renderAsOf(); renderNetworth(); renderOverview(); renderPortfolio(); renderExit(); renderBuy(); renderPaper(); renderIdeas(); renderHistory();
   renderAnalyze(); renderOptions(); renderModels(); renderRuns(); renderActions(); renderSettings();
 }
 fetch('./data/dashboard.json', { cache: 'no-store', credentials: 'same-origin' })
@@ -1066,5 +1681,6 @@ fetch('./data/dashboard.json', { cache: 'no-store', credentials: 'same-origin' }
     $('#statusText').textContent = 'No data'; route();
   });
 </script>
+<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});</script>
 </body>
 </html>

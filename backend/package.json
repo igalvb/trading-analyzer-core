@@ -46,7 +46,9 @@
     "ops-verify": "node --env-file-if-exists=.env src/verify.ts",
     "claude-order": "node --env-file-if-exists=.env src/claudeOrder.ts",
     "claude-idea": "node --env-file-if-exists=.env src/claudeIdea.ts",
-    "dashboard-build": "TZ=America/New_York node --env-file-if-exists=.env src/dashboardBuild.ts"
+    "dashboard-build": "TZ=America/New_York node --env-file-if-exists=.env src/dashboardBuild.ts",
+    "ledger-migrate": "TZ=America/New_York node --env-file-if-exists=.env src/ledgerMigrate.ts",
+    "ledger-history": "TZ=America/New_York node --env-file-if-exists=.env src/ledgerHistory.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

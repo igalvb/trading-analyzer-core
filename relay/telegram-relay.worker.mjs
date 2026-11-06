@@ -29,8 +29,8 @@
  * skips late runs). Deploy this code BEFORE adding the triggers (older code started the nightly on any trigger).
  * Every timer starts the job once per user, the owner first, then USERS in their order (never one trigger per user).
  *
- * Commands: /exit, /exit opus, /analyze (a button menu of stocks + "Other ticker"), /analyze TICKER [opus], /verify
- * (alias /check: the Opus check of the last 3 days of runs, verify.yml), /help (anything else gets the help text).
+ * Commands: /exit, /exit opus, /analyze (a button menu of stocks + "Other ticker"), /analyze TICKER [opus],
+ * /help (anything else gets the help text).
  * "Other ticker" asks for the ticker; the answer to that question ("COIN" or "COIN opus") starts the run.
  * Owner 2026-11-05: Claude Opus is paid, so it runs only when asked: after a stock button, two buttons
  * "Free (Gemini)" / "+ Opus"; or the word `opus` after the command. Without it, analyze sends no `opus` input
@@ -41,7 +41,7 @@
  *  its own file with them filled in; nothing else differs. */
 const DEFAULT_REPO = '';
 /** Bumped on every change, so the live version can be checked (a GET on the relay answers with it). */
-export const RELAY_VERSION = '2026-11-06.1';
+export const RELAY_VERSION = '2026-11-06.2';
 const DEFAULT_TICKERS = [];
 /** The owner's user id (the workflows' default `user`). */
 export const OWNER_USER = 'owner';
@@ -55,11 +55,7 @@ const HELP = [
   '/exit opus: the same, with a Claude Opus read of every holding first (paid, about $0.25). About 4 min.',
   '/analyze: pick a stock, then Free (Gemini) or + Opus (paid, about $0.15). Full analysis (Sheet + PDF), about 3 min.',
   '/analyze AAPL: free (Gemini). /analyze AAPL opus: with Claude Opus too.',
-  '/verify (or /check): checks every run of the last 3 days and asks Claude Opus what went wrong and how to fix it. About 2 min.',
 ].join('\n');
-/** The /verify reply and the days it checks (verify.yml `days`). */
-export const VERIFY_REPLY = '🩺 Verifying the last 3 days… about 2 min.';
-const VERIFY_DAYS = '3';
 
 const cleanTickers = (list) => list.map((t) => String(t).trim().toUpperCase()).filter((t) => TICKER_RE.test(t));
 
@@ -199,7 +195,6 @@ export function parseCommand(text) {
   if (!m) return { kind: 'help' };
   const cmd = m[1].toLowerCase(), arg = (m[2] || '').trim().toUpperCase();
   if (cmd === 'exit') return arg === 'OPUS' ? { kind: 'exit', opus: true } : { kind: 'exit' };
-  if (cmd === 'verify' || cmd === 'check') return { kind: 'verify' };
   if (cmd === 'analyze') {
     if (!arg) return { kind: 'analyze-menu' };
     const t = parseTickerOpus(arg);
@@ -255,9 +250,6 @@ export default {
     if (c.kind === 'exit') {
       const err = await dispatch(env, 'send-exit.yml', inputsFor(who.user, c.opus ? { opus: 'true' } : {}));
       if (err) await refused(env, who, err); else await reply(env, who.chat, c.opus ? '⏳ Exit Report with Opus… about 4 min.' : '⏳ Getting the Exit Report…');
-    } else if (c.kind === 'verify') {
-      const err = await dispatch(env, 'verify.yml', inputsFor(who.user, { days: VERIFY_DAYS }));
-      if (err) await refused(env, who, err); else await reply(env, who.chat, VERIFY_REPLY);
     } else if (c.kind === 'analyze') {
       await startAnalyze(env, who, c.ticker, c.opus === true);
     } else if (c.kind === 'analyze-menu') {

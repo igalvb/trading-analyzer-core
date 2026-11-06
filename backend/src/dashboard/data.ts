@@ -14,6 +14,9 @@
  *   📈 Options Reads / 📐 Options Measures / 🌐 Market Options Read   the options read (shown, not scored)
  *   🩺 Run Health          the watchdog's rows (Runs tab); the minutes when GitHub was not asked
  *   🤖 Claude Ideas        Claude's recommendations list, no money (paper/claudeIdeas.ts; Paper tab, Ideas section)
+ *   ledger/* (data branch) the net worth screen and the growth graph (ledger/networth.ts), when the `data` branch is
+ *                          checked out (DATA_BRANCH_DIR, default <repo>/data-branch); absent: `networth` and `growth`
+ *                          are left out (named in `missing`)
  *
  * The structured rows the pipelines write are preferred; a report tab is read only through its fixed table header
  * (reports/exitSheet/text.ts tocColumns, reports/buySheet/text.ts rankingColumns), never through free text.
@@ -43,6 +46,7 @@ import { TRANSACTIONS_SHEET, TRANSACTIONS_HEADERS } from '../portfolio/transacti
 import { RUN_HEALTH_TAB, RUN_HEALTH_HEADER } from '../watchdog.ts';
 import { FREE_MINUTES } from '../reports/digest/actionsMinutes.ts';
 import { CLAUDE_IDEAS_TAB, CLAUDE_IDEAS_HEADER, parseIdeaZone, ideaStatusOf } from '../paper/claudeIdeas.ts';
+import { buildNetWorth, buildGrowth, type LedgerSources, type NetWorth, type Growth } from '../ledger/networth.ts';
 
 /** Bump when a field changes meaning or is removed (the app checks it); adding a field keeps the number. */
 export const DASHBOARD_SCHEMA = 1;
@@ -71,6 +75,8 @@ export interface DashboardSources {
   readonly marketOptions?: Grid | null;
   readonly runHealth?: Grid | null;
   readonly claudeIdeas?: Grid | null;
+  /** The ledger files of the `data` branch (ledger/networth.ts readLedgerSources); null / absent = not checked out. */
+  readonly ledger?: LedgerSources | null;
 }
 
 export interface DashboardContext {
@@ -86,6 +92,8 @@ export interface DashboardContext {
   /** GitHub minutes when the workflow could ask GitHub; null = summed from 🩺 Run Health. */
   readonly minutes?: { readonly used: number; readonly cap: number } | null;
   readonly logger?: Logger | null;
+  /** The day's USD/ILS rate when known from elsewhere; else the newest ledger snapshot's. */
+  readonly fxUsdIls?: { readonly usdIls: number; readonly date?: string | null } | null;
 }
 
 // ── output shape ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -124,6 +132,8 @@ export interface DashHolding {
   readonly t2: number | null;
   readonly flags: string | null;
   readonly why: string | null;
+  /** The Portfolio tab's sub-type cell as written (the allocation pie); absent when the tab has none. */
+  readonly subType?: string | null;
 }
 
 export interface DashGroupTotal { readonly id: HoldingGroup; readonly label: string; readonly count: number; readonly value: number; readonly cost: number; readonly gain: number }
@@ -200,6 +210,10 @@ export interface DashboardData {
   readonly runs?: { readonly items: readonly DashRun[] };
   readonly minutes?: { readonly used: number; readonly cap: number; readonly source: 'github' | 'run-health' };
   readonly market?: readonly { readonly name: string; readonly value: number | null }[];
+  /** Everything the owner has, from the ledger (stocks, crypto and calls priced live), in USD and ILS. */
+  readonly networth?: NetWorth;
+  /** The growth graph: one snapshot per day and the money in / out marks. */
+  readonly growth?: Growth;
   /** Sections left out (their tab missing or unreadable). */
   readonly missing: readonly string[];
 }
@@ -447,7 +461,8 @@ export function parseHoldings(grid: Grid | null | undefined, ctx: { readonly tax
       const price = live ?? reported ?? sheetPrice ?? (sheetValue != null && qty ? sheetValue / qty : null);
       const value = price != null && qty != null ? price * qty : sheetValue;
       const cost = qty != null && avg != null ? qty * avg : null;
-      const sub = subCol ? toStringSafe(cell(row, cols, subCol)).toLowerCase() : '';
+      const subText = subCol ? toStringSafe(cell(row, cols, subCol)).trim() : '';
+      const sub = subText.toLowerCase();
       const kind: HoldingKind = type === 'crypto' ? 'crypto' : BITCOIN_ETF_TICKERS.includes(ticker) ? 'btc' : /etf|fund/.test(sub) ? 'etf' : 'stock';
       const crypto = kind === 'crypto';
       const tg = crypto ? { t1: null, t2: null } : targetFor(ticker, ticker, null, e);
@@ -455,7 +470,7 @@ export function parseHoldings(grid: Grid | null | undefined, ctx: { readonly tax
         key: (crypto ? 'crypto:' : 'stock:') + ticker + ':' + (r + 1), ticker, label: holdingLabel(ticker, kind), kind, group: kind === 'crypto' ? 'crypto' : kind === 'btc' ? 'btc' : 'stocks',
         qty, price: r4(price), priceSource: live != null ? 'live' : reported != null ? 'report' : price != null ? 'sheet' : null, value: r2(value), cost: r2(cost), ...taxView(value, cost, ctx.taxRate),
         entryDate: purchaseDay(row, cols), analysed: !crypto, note: crypto ? 'not analysed (crypto)' : null,
-        ...verdictFields(e), t1: tg.t1, t2: tg.t2,
+        ...verdictFields(e), t1: tg.t1, t2: tg.t2, ...(subText ? { subType: subText.slice(0, 60) } : {}),
       });
     }
   }
@@ -776,6 +791,9 @@ export function buildDashboard(src: DashboardSources, ctx: DashboardContext): Da
   const runItems = section('runs', !!src.runHealth, () => { const items = parseRuns(src.runHealth); return items.length ? items : null; });
   const minutes = ctx.minutes ? { used: ctx.minutes.used, cap: ctx.minutes.cap, source: 'github' as const }
     : runItems ? { used: runHealthMinutes(runItems, ctx.nowMs), cap: FREE_MINUTES, source: 'run-health' as const } : undefined;
+  const networth = section('networth', !!(src.ledger && (src.ledger.holdings || src.ledger.assets)), () =>
+    buildNetWorth({ ledger: src.ledger as LedgerSources, live: portfolio?.holdings ?? [], nowMs: ctx.nowMs, fx: ctx.fxUsdIls ?? null, prices }));
+  const growth = section('growth', !!(src.ledger && (src.ledger.snapshots || src.ledger.flows)), () => buildGrowth(src.ledger as LedgerSources));
   const market = options?.market.length
     ? [...options.market.map((m) => ({ name: m.etf, value: m.spot })), ...(options.market[0]?.vix != null ? [{ name: 'VIX', value: options.market[0].vix }] : []), ...options.market.filter((m) => m.pcOi != null).slice(0, 1).map((m) => ({ name: m.etf + ' P/C', value: m.pcOi }))]
     : undefined;
@@ -785,7 +803,7 @@ export function buildDashboard(src: DashboardSources, ctx: DashboardContext): Da
     user: { labels: { list: ctx.labels.list, holdCore: ctx.labels.holdCore, holdList: ctx.labels.holdList, qqq: QQQ_ROW }, taxRate: ctx.taxRate, list: [...ctx.list], timeZone: ctx.timeZone },
     ...(portfolio ? { portfolio } : {}), ...(exit ? { exit } : {}), ...(buy ? { buy } : {}), ...(history ? { history } : {}), ...(paper ? { paper } : {}), ...(ideas ? { ideas } : {}),
     ...(options ? { options } : {}), ...(models ? { models } : {}), ...(decisions ? { decisions } : {}), ...(runItems ? { runs: { items: runItems } } : {}),
-    ...(minutes ? { minutes } : {}), ...(market ? { market } : {}), missing,
+    ...(minutes ? { minutes } : {}), ...(market ? { market } : {}), ...(networth ? { networth } : {}), ...(growth ? { growth } : {}), missing,
   };
 }
 

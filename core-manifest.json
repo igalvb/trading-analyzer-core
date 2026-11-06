@@ -12,7 +12,7 @@
     "+ .github/pull_request_template.md",
     "+ .github/workflows/*.yml",
     "+ relay/telegram-relay.worker.mjs",
-    "+ docs/{SETUP_GUIDE,PREREQUISITES,USER_MANUAL,DASHBOARD}.md",
+    "+ docs/{SETUP_GUIDE,PREREQUISITES,USER_MANUAL,DASHBOARD,LEDGER}.md",
     "+ backend/**",
     "- backend/README.md",
     "- backend/.github/**",

@@ -34,6 +34,14 @@ import { runNightly, buildPlainSummary } from './jobs/nightly/nightly.ts';
 import type { CliIo } from './cli.ts';
 import { STD_IO } from './cli.ts';
 import { withSheetWrites, isUnlockFailure, UNLOCK_FAILED_LINE } from './app/sheetWrites.ts';
+import type { Services } from './compose.ts';
+import { activeProfile } from './profile/active.ts';
+import { orElseAsync } from './core/guard.ts';
+import { formatDateInTz } from './core/dates.ts';
+import { fetchYahooChartRaw } from './fetch/yahoo.ts';
+import { dataBranchDir } from './ledger/store.ts';
+import { runLedgerNight, type LedgerNightDeps } from './ledger/night.ts';
+import { fetchCryptoPrices } from './ledger/cryptoPrices.ts';
 
 export async function nightlyMain(argv: readonly string[], io: CliIo = STD_IO, over: { readonly transport?: HttpTransport; readonly clock?: { now(): number }; readonly initialTabs?: Record<string, unknown[][]> } = {}): Promise<number> {
   const flags = new Set(argv);
@@ -71,6 +79,11 @@ export async function nightlyMain(argv: readonly string[], io: CliIo = STD_IO, o
     throw e;
   }
   const summary = run.value;
+  // docs/LEDGER.md phase 3: profile storage.ledger shadow / on (off = nothing at all). Never fails the night.
+  if (built && activeProfile().storage.ledger !== 'off') {
+    const app: NightlyApp = built;
+    await orElseAsync(s.ctx.log, 'ledger night', () => runLedgerNight(ledgerNightDeps(s, app)), null);
+  }
   // F-B7-1: the Sheets quota (about 50 calls a minute) is what sets the run time; log the count every run.
   if (s.sheets) s.ctx.log.info('Sheets API calls this run: ' + [s.sheets, s.reportsSheets, s.dataSheets].reduce((n, c) => n + (c ? c.callCount() : 0), 0));
   io.out([...buildPlainSummary(summary), ...run.reportLines].join('\n') + '\n');
@@ -86,6 +99,25 @@ export async function nightlyMain(argv: readonly string[], io: CliIo = STD_IO, o
     });
   }
   return summary.overall === 'failed' ? 1 : 0;
+}
+
+/** The ledger night's inputs from the run's services: tonight's (cached) charts for stocks, Yahoo for crypto and USD/ILS. */
+export function ledgerNightDeps(s: Services, app: Pick<NightlyApp, 'portfolio'>): LedgerNightDeps {
+  const mode = activeProfile().storage.ledger;
+  const lastOf = (c: { readonly closes: readonly number[] } | null | undefined): number | null => (c && c.closes.length ? (c.closes[c.closes.length - 1] ?? null) : null);
+  return {
+    mode, root: dataBranchDir(s.env), sheetPortfolio: mode === 'shadow' ? app.portfolio : null,
+    today: formatDateInTz(new Date(s.clock.now()), 'America/New_York'),
+    // A stock's chart was fetched (and stored) by tonight's analysis; a crypto pair is read raw, so no price tab is created.
+    close: async (t) => lastOf(t.endsWith('-USD') ? await fetchYahooChartRaw(s.http, t, '1mo') : await s.fetchChart(t)),
+    fxUsdIls: async () => lastOf(await fetchYahooChartRaw(s.http, 'ILS=X', '1mo')),
+    cryptoPrices: activeProfile().ledger.cryptoPrices,
+    fetchCrypto: (symbols) => fetchCryptoPrices(symbols, {
+      fetch: async (url, timeoutMs) => { const r = await s.http.fetch({ url, muteHttpExceptions: true, timeoutMs }); return { status: r.status, text: r.text() }; },
+      log: { warn: (m) => s.ctx.log.warning(m) },
+    }),
+    info: (m) => s.ctx.log.info(m), warn: (m) => s.ctx.log.warning(m),
+  };
 }
 
 /** HTML to PDF with the runner's Chrome; null when there is none. */

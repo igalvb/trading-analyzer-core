@@ -81,6 +81,10 @@ import { OPTIONS_READ_APPLIED, seedOptionsWorkbook, shadowLine } from '../analys
 import { runFundamentalsHistoryNight } from '../storage/fundamentalsHistory.ts';
 import { formatDateInTz } from '../core/dates.ts';
 import { orElseAsync } from '../core/guard.ts';
+import { dataBranchDir, readLedgerJson } from '../ledger/store.ts';
+import { toPortfolio } from '../ledger/toPortfolio.ts';
+import { LEDGER_FILES } from '../ledger/schema.ts';
+import type { LedgerMode } from '../profile/schema.ts';
 import { measuresOfNight, optionsRunReport, recordOptionsNight, runOptionsChains, shadowInputOf, type OptionsNight } from '../jobs/options/optionsNight.ts';
 
 export interface NightlyAppOptions {
@@ -103,8 +107,19 @@ export interface NightlyApp {
 
 const NIGHTLY_TICKER_TIMEOUT_MS = 10 * 60_000;
 
-/** The Portfolio sheet (sheets: one batchGet; memory: the workbook's own tab). */
-export async function loadPortfolio(s: Services): Promise<PortfolioResult> {
+/**
+ * The Portfolio sheet (sheets: one batchGet; memory: the workbook's own tab). Profile `storage.ledger` 'on'
+ * (docs/LEDGER.md): the ledger's holdings.json on the data branch folder instead; the sheet is not read for holdings.
+ */
+export async function loadPortfolio(s: Services, ledger: LedgerMode = activeProfile().storage.ledger): Promise<PortfolioResult> {
+  if (ledger === 'on') {
+    const root = dataBranchDir(s.env);
+    const h = readLedgerJson(root, 'holdings');
+    if (!h) throw new Error('Ledger (storage.ledger on): no ' + LEDGER_FILES.holdings + ' in the data branch folder (' + root + ')');
+    const p = toPortfolio(h);
+    s.ctx.log.info('Portfolio (ledger): ' + p.stocks.length + ' stock holding(s), ' + p.options.length + ' option position(s)', { skippedCrypto: p.skippedCrypto.length });
+    return p;
+  }
   if (s.sheets) {
     const r = await readPortfolio(s.ctx, s.sheets);
     if (!r.ok) throw new Error('Portfolio sheet: ' + String(r.error.detail));
