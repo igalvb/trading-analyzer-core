@@ -409,6 +409,12 @@ function columnLetter(n: number): string {
  *   4. every tab's remaining formatting: ONE formatBatch
  * Tab colours are not read back (TabInfo.tabColor is null), so sheetGuardian-style checks have no state here.
  */
+/** A new Google Sheets tab's grid. */
+const DEFAULT_GRID_ROWS = 1000;
+const DEFAULT_GRID_COLS = 26;
+/** Spare rows added when a tab is grown, so a slightly longer report next night needs no second grow. */
+const GRID_SLACK_ROWS = 200;
+
 export class SheetsWorkbookBackend implements WorkbookBackend {
   private readonly ctx: RunContext;
   private readonly api: PriceSheetsApi;
@@ -447,6 +453,26 @@ export class SheetsWorkbookBackend implements WorkbookBackend {
     if (!r.ok) throw new TabStoreError(r.error);
     return {};
   }
+  /** appendDimension requests for tabs whose cells go past their grid (default grid for a new tab: 1000 rows x 26 columns). */
+  private async growRequests(
+    tabs: ReadonlyArray<{ tab: string; created: boolean; cells: TabChange['cells'] }>,
+    idOf: (tab: string) => Promise<number>,
+  ): Promise<sheets_v4.Schema$Request[]> {
+    const need = tabs.map((t) => ({ ...t, rows: t.cells.reduce((m, c) => Math.max(m, c.row), 0), cols: t.cells.reduce((m, c) => Math.max(m, c.col), 0) }))
+      .filter((t) => t.rows > DEFAULT_GRID_ROWS || t.cols > DEFAULT_GRID_COLS);
+    if (!need.length) return [];
+    const grids = this.api.tabGrids ? await this.api.tabGrids(this.ctx) : null;
+    const size = new Map((grids && grids.ok ? grids.value : []).map((g) => [g.title, g]));
+    const out: sheets_v4.Schema$Request[] = [];
+    for (const t of need) {
+      const sheetId = await idOf(t.tab);
+      const g = t.created ? undefined : size.get(t.tab);
+      const rows = g ? g.rowCount : DEFAULT_GRID_ROWS, cols = g ? g.columnCount : DEFAULT_GRID_COLS;
+      if (t.rows > rows) out.push({ appendDimension: { sheetId, dimension: 'ROWS', length: t.rows - rows + GRID_SLACK_ROWS } });
+      if (t.cols > cols) out.push({ appendDimension: { sheetId, dimension: 'COLUMNS', length: t.cols - cols } });
+    }
+    return out;
+  }
   async applyTabs(changes: ReadonlyArray<readonly [string, TabChange]>): Promise<void> {
     if (!changes.length) return;
     const added = await this.addTabs(changes.filter(([, c]) => c.created).map(([t]) => t));
@@ -480,6 +506,14 @@ export class SheetsWorkbookBackend implements WorkbookBackend {
         clearIds.push(await idOf(tab));
       }
       plans.push({ tab, change, lastClear, preCleared });
+    }
+    // Fix 2026-11-06 (live: the weekly-stops Exit report reached 1,139 rows and Sheets refused "exceeds grid limits",
+    // leaving the tab empty): a tab written past its grid is grown first, before any clear (new tabs are 1000 x 26). Only checked when a
+    // write goes past the default size, so ordinary runs make no extra call.
+    const grow = await this.growRequests(plans.map((p) => ({ tab: p.tab, created: !!p.change.created, cells: p.change.cells })), idOf);
+    if (grow.length) {
+      const r = await this.api.formatBatch(this.ctx, grow);
+      if (!r.ok) throw new TabStoreError(r.error);
     }
     if (pre.length) {
       // Still one call: the value clears of the tabs that keep their formats ride in the same batch

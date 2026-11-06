@@ -190,7 +190,8 @@ describe('FL-4 — SEC EDGAR lookups', { skip: ready ? false : 'legacy/ not popu
       const ex = SEC_DILUTION_KEYWORDS.map((kw, i) => recordedGet(search(kw, since), i === 3 ? 500 : 200, i === 1 ? '{"hits":{}}' : i === 2 ? '{bad' : JSON.stringify({ hits: { total: { value: i * 7, relation: 'eq' } } })));
       const L = legacy(freshEnv(), ex.slice(0, 4), NOW, (o) => o.call('fetchSecFilingKeywordHitsV1', '320193', since));
       const P = portDeps(freshEnv(), ex.slice(0, 4), NOW);
-      assert.deepStrictEqual(await fetchSecFilingKeywordHits(P.deps, '320193', since), L.value, 'since=' + since);
+      // Legacy: one try per keyword (production retries 5xx / network errors: test/fix20261105.secSearchRetry.test.ts).
+      assert.deepStrictEqual(await fetchSecFilingKeywordHits(P.deps, '320193', since, { retries: 0 }), L.value, 'since=' + since);
       assert.deepStrictEqual(P.transport.trace, L.trace, 'keywords in order, the window ending today (UTC)');
     }
   });

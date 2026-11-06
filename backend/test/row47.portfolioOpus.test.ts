@@ -127,17 +127,21 @@ describe('Plan #47: the portfolio view (unit, fake SDK)', () => {
     assert.notEqual(v.state, 'ok');
   });
 
-  test('Telegram: sent as one message when set up; skipped when not; a failure does not throw', async () => {
+  test('Telegram (clean policy): a written view is NOT sent (it is in the Exit PDFs); off/failed sends one line; a failure does not throw', async () => {
     const sent: string[] = [];
     const fetchOk = (async (_u: string, init: { body: string }) => { sent.push(JSON.parse(init.body).text); return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 }); }) as unknown as typeof fetch;
     const io = { out: () => {}, err: () => {} };
     const v = await portfolioOpusView({ ctx: ctxOf(), apiKey: FAKE_KEY, sdk: fakeSdk().sdk }, 'x', 'low');
-    assert.equal(await sendPortfolioView(v, { TELEGRAM_BOT_TOKEN: 'tok', TELEGRAM_CHAT_ID: '1' }, io, fetchOk), true);
+    assert.equal(v.state, 'ok');
+    assert.equal(await sendPortfolioView(v, { TELEGRAM_BOT_TOKEN: 'tok', TELEGRAM_CHAT_ID: '1' }, io, fetchOk), false);
+    assert.equal(sent.length, 0, 'ok: silent');
+    const off = await portfolioOpusView({ ctx: ctxOf(), apiKey: '', sdk: fakeSdk().sdk }, 'x', 'low');
+    assert.equal(await sendPortfolioView(off, { TELEGRAM_BOT_TOKEN: 'tok', TELEGRAM_CHAT_ID: '1' }, io, fetchOk), true);
     assert.equal(sent.length, 1);
-    assert.ok(sent[0]!.includes('Most of the money rides on one bet'));
-    assert.equal(await sendPortfolioView(v, {}, io, fetchOk), false);
+    assert.ok(!sent[0]!.includes('\n'), 'one line');
+    assert.equal(await sendPortfolioView(off, {}, io, fetchOk), false);
     const fetchBad = (async () => { throw new Error('down'); }) as unknown as typeof fetch;
-    assert.equal(await sendPortfolioView(v, { TELEGRAM_BOT_TOKEN: 'tok', TELEGRAM_CHAT_ID: '1' }, io, fetchBad), false);
+    assert.equal(await sendPortfolioView(off, { TELEGRAM_BOT_TOKEN: 'tok', TELEGRAM_CHAT_ID: '1' }, io, fetchBad), false);
   });
 
   test('/exit message: the saved view is read back from the tab, up to the first holding', () => {

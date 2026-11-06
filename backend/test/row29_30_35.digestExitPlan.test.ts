@@ -1,6 +1,7 @@
 /**
  * BACKLOG rows 29, 30, 35 (2026-10-31):
- *   29  the nightly digest to Telegram (one table + the Buy and Exit PDFs), never breaking the nightly;
+ *   29  the nightly digest to Telegram (the Buy and Exit PDFs only, the bottom line as the caption, the summary table
+ *       on the first PDF's cover; clean policy 2026-11-05), never breaking the nightly;
  *   30  the exit plan page for a held ticker in the Analyze PDF;
  *   35  Exit audit leftovers: #7 jump links, #4 AI status in the banner, #30 Bitcoin momentum, #37 model scores,
  *       #44 AI facts (trailing stop, Bitcoin flag).
@@ -19,7 +20,8 @@ import { T } from '../src/reports/exitSheet/text.ts';
 import type { ExitHoldingInput, ExitReportInput, ModelRead } from '../src/reports/exitSheet/types.ts';
 import { momentumText, withModelScores } from '../src/jobs/exit/exitReportAdapter.ts';
 import { modelSignalsOf } from '../src/app/analysisCache.ts';
-import { digestOf, digestTable, sendNightlyDigest, problemsOf, paperLine, type DigestCapture } from '../src/reports/digest/nightlyDigest.ts';
+import { digestOf, digestTable, sendNightlyDigest, problemsOf, paperLine, nightlyCaption, type DigestCapture } from '../src/reports/digest/nightlyDigest.ts';
+import { bottomLine, alertLine, CAPTION_MAX_CHARS } from '../src/notify/policy.ts';
 import { newPaperState } from '../src/paper/paperTrading.ts';
 import { runNightlyDigest } from '../src/nightly.ts';
 import { sendTable, escapeHtml } from '../src/notify/telegram.ts';
@@ -67,7 +69,8 @@ function fakeTelegram(fail: Set<string> = new Set()) {
   const calls: Array<{ method: string; body: any }> = [];
   const fetchImpl = (async (url: string, init: { body: any }) => {
     const method = url.split('/').pop() as string;
-    calls.push({ method, body: typeof init.body === 'string' ? JSON.parse(init.body) : init.body });
+    const b = init.body;
+    calls.push({ method, body: typeof b === 'string' ? JSON.parse(b) : b instanceof FormData ? { name: (b.get('document') as File).name, caption: b.get('caption') } : b });
     if (fail.has(method)) return new Response(JSON.stringify({ ok: false, description: 'Bad Request' }), { status: 400 });
     return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
   }) as unknown as typeof fetch;
@@ -148,56 +151,80 @@ describe('row 29 — nightly digest', () => {
     assert.deepEqual(problemsOf(null), ['run did not finish']);
   });
 
-  test('sends one HTML <pre> table, then the Buy and Exit PDFs', async () => {
+  test('a normal nightly sends exactly its two PDFs, the bottom line as the first caption, and NO text message', async () => {
     const cap = await capture();
     const { calls, fetchImpl } = fakeTelegram();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r29-'));
     const htmls: string[] = [];
+    const st = newPaperState(['AAPL']);
+    st.marks.push({ day: '2026-10-29', values: { current: 104_000, turtle: 107_500, engine: 99_000, schabacker: 101_000, qqq: 101_800, basket: 120_000, 'lab.list14': 102_400 } });
+    const data = digestOf({ day: '30 Oct 2026', regime: 'NEUTRAL', capture: cap, paper: st, summary: { ...summary(), steps: [], tickers: [], overall: 'ok' } });
     const sent = await sendNightlyDigest({
       telegram: { deps: { token: TOKEN, fetchImpl }, chatId: '42' }, toPdf: async (h, p) => { htmls.push(h); fs.writeFileSync(p, '%PDF'); },
-      log: () => {}, timeZone: 'America/New_York', now: NOW.getTime(), outDir: dir,
-    }, digestOf({ day: '30 Oct 2026', regime: 'NEUTRAL', capture: cap, paper: null, summary: summary() }), cap);
-    assert.equal(sent.message, true);
+      log: () => {}, timeZone: 'America/New_York', now: NOW.getTime(), outDir: dir, footer: ['GitHub minutes this month: ~412 of 2,000 (est.)'],
+    }, data, cap);
+    assert.equal(sent.message, false, 'no text message');
     assert.deepEqual(sent.pdfs, ['v13-nightly-buy-20261030.pdf', 'v13-nightly-exit-20261030.pdf']);
-    assert.deepEqual(calls.map((c) => c.method), ['sendMessage', 'sendDocument', 'sendDocument']);
-    assert.equal(calls[0]!.body.parse_mode, 'HTML');
-    assert.match(calls[0]!.body.text, /^<b>🌙 Nightly 30 Oct 2026<\/b>\n<pre>Market {3}Neutral/);
+    assert.deepEqual(calls.map((c) => c.method), ['sendDocument', 'sendDocument'], 'PDFs only');
+    assert.equal(calls[0]!.body.caption, 'Nightly 30 Oct: 2 BUY · 1 EXIT, 2 HOLD · paper +7.5% (QQQ +1.8%)');
+    assert.equal(calls[0]!.body.caption, nightlyCaption(data));
+    assert.equal(calls[1]!.body.caption, null, 'one bottom line on the first PDF is enough');
     assert.ok(htmls[0]!.includes('BUY REPORT') && htmls[1]!.includes('EXIT REPORT'));
+    // What used to be the Telegram table is on the first PDF's cover, with the minutes line.
+    assert.match(htmls[0]!, /Market {3}Neutral/);
+    assert.match(htmls[0]!, /Buy T1 {3}NVDA, AVGO/);
+    assert.match(htmls[0]!, /GitHub minutes this month: ~412 of 2,000/);
+    assert.ok(!htmls[1]!.includes('Buy T1'), 'the summary is on the first PDF only');
   });
 
-  test('never throws: Telegram down, the PDF maker failing, no browser', async () => {
+  test('the caption: at most 2 lines and about 200 characters; data problems on line 2', async () => {
+    const cap = await capture();
+    const c = nightlyCaption(digestOf({ day: '30 Oct 2026', regime: 'NEUTRAL', capture: cap, paper: null, summary: summary() }));
+    assert.match(c, /^Nightly 30 Oct: 2 BUY · 1 EXIT, 2 HOLD\n⚠️ 2 data problem\(s\): failed: BADX; Market-wide data refresh failed$/);
+    const long = bottomLine('Head', ['x'.repeat(500)], 'y'.repeat(500));
+    assert.ok(long.length <= CAPTION_MAX_CHARS && long.split('\n').length === 2, long);
+    assert.equal(bottomLine('A', ['b\nc', null, '', 'd']), 'A: b · c · d');
+    assert.equal(alertLine('one\ntwo'), 'one · two');
+    assert.equal(nightlyCaption(digestOf({ day: 'd', capture: {}, paper: null, summary: { ...summary(), steps: [], tickers: [], overall: 'ok' } })), 'Nightly d: Buy not built · Exit not built');
+  });
+
+  test('never throws: Telegram down, the PDF maker failing, no browser (then ONE plain line)', async () => {
     const cap = await capture();
     const logs: string[] = [];
     const down = fakeTelegram(new Set(['sendMessage', 'sendDocument']));
     const r1 = await sendNightlyDigest({ telegram: { deps: { token: TOKEN, fetchImpl: down.fetchImpl }, chatId: '42' }, toPdf: async () => { throw new Error('chrome crashed'); }, log: (m) => logs.push(m), timeZone: 'UTC', now: 0 },
       digestOf({ day: 'd', capture: cap, paper: null, summary: null }), cap);
     assert.deepEqual(r1, { message: false, pdfs: [] });
-    assert.ok(logs.some((l) => l.includes('refused the message')) && logs.some((l) => l.includes('PDF not sent')));
+    assert.ok(logs.some((l) => l.includes('PDF not made')) && logs.some((l) => l.includes('alert line could not be sent')), logs.join('\n'));
     assert.ok(!logs.join('\n').includes(TOKEN), 'the bot key is never logged');
     const ok = fakeTelegram();
     const r2 = await sendNightlyDigest({ telegram: { deps: { token: TOKEN, fetchImpl: ok.fetchImpl }, chatId: '42' }, toPdf: null, log: () => {}, timeZone: 'UTC', now: 0 },
       digestOf({ day: 'd', capture: cap, paper: null, summary: null }), cap);
     assert.equal(r2.message, true);
     assert.equal(r2.pdfs.length, 0);
-    assert.match(ok.calls[0]!.body.text, /PDFs {5}not made \(no browser\)/);
+    assert.equal(ok.calls.length, 1);
+    assert.ok(!ok.calls[0]!.body.text.includes('\n'), 'one line');
+    assert.match(ok.calls[0]!.body.text, /^Nightly d: 2 BUY · 1 EXIT, 2 HOLD · .*⚠️ PDFs not made \(no browser\)$/);
   });
 
-  test('runNightlyDigest: a failing regime read and an unreadable paper state are logged, the digest still goes', async () => {
+  test('runNightlyDigest: a failing regime read and an unreadable paper state are logged, the PDFs still go', async () => {
     const cap = await capture();
     const { calls, fetchImpl } = fakeTelegram();
     const logs: string[] = [];
+    const htmls: string[] = [];
     const store = { read: async () => { throw new Error('tab gone'); } } as never;
     const r = await runNightlyDigest({
       app: { digest: cap }, summary: summary(), store, timeZone: 'America/New_York', now: NOW.getTime(), log: (m) => logs.push(m),
-      regime: async () => { throw new Error('macro down'); }, telegram: { deps: { token: TOKEN, fetchImpl }, chatId: '42' }, toPdf: null,
+      regime: async () => { throw new Error('macro down'); }, telegram: { deps: { token: TOKEN, fetchImpl }, chatId: '42' },
+      toPdf: async (h, p) => { htmls.push(h); fs.writeFileSync(p, '%PDF'); }, outDir: fs.mkdtempSync(path.join(os.tmpdir(), 'r29b-')),
     });
-    assert.equal(r.message, true);
-    assert.equal(calls.length, 1);
-    assert.match(calls[0]!.body.text, /Market {3}not read · EI 62%/);
+    assert.equal(r.pdfs.length, 2);
+    assert.deepEqual(calls.map((c) => c.method), ['sendDocument', 'sendDocument']);
+    assert.match(htmls[0]!, /Market {3}not read · EI 62%/);
     assert.ok(logs.some((l) => l.includes('market regime not read')) && logs.some((l) => l.includes('paper test not read')));
   });
 
-  test('row 38: runNightlyDigest ends the table with the GitHub minutes line; a failing reader gives "could not read"', async () => {
+  test('row 38: the GitHub minutes line ends the summary on the first PDF; a failing reader gives "could not read"', async () => {
     const cap = await capture();
     const cases: Array<[() => Promise<string>, string]> = [
       [async () => 'GitHub minutes this month: ~412 of 2,000 (est.)', 'GitHub minutes this month: ~412 of 2,000 (est.)'],
@@ -205,12 +232,14 @@ describe('row 29 — nightly digest', () => {
     ];
     for (const [reader, want] of cases) {
       const { calls, fetchImpl } = fakeTelegram();
+      const htmls: string[] = [];
       await runNightlyDigest({
         app: { digest: cap }, summary: summary(), store: { read: async () => [] } as never, timeZone: 'America/New_York', now: NOW.getTime(), log: () => {},
-        regime: async () => 'RISK_ON', telegram: { deps: { token: TOKEN, fetchImpl }, chatId: '42' }, toPdf: null, minutesLine: reader,
+        regime: async () => 'RISK_ON', telegram: { deps: { token: TOKEN, fetchImpl }, chatId: '42' },
+        toPdf: async (h, p) => { htmls.push(h); fs.writeFileSync(p, '%PDF'); }, outDir: fs.mkdtempSync(path.join(os.tmpdir(), 'r29c-')), minutesLine: reader,
       });
-      assert.equal(calls.length, 1);
-      assert.ok((calls[0]!.body.text as string).endsWith(want + '</pre>'), calls[0]!.body.text);
+      assert.ok(calls.length === 2 && calls.every((c) => c.method === 'sendDocument'), 'no text message');
+      assert.ok(htmls[0]!.includes(want), want);
     }
   });
 
@@ -319,7 +348,7 @@ describe('row 30 — exit plan for a held ticker in Analyze', () => {
     assert.equal(await heldExitPlan({ ...(services(PORTFOLIO) as object), openWorkbook: async () => { throw new Error('sheet down'); } } as never, 'TEST', null), null, 'a failure costs only the page');
   });
 
-  test('Analyze: the plan is the first page after the cover and the message says the action', async () => {
+  test('Analyze: the plan is the first page after the cover and the caption says the action', async () => {
     const wb = await ReportWorkbook.open(new MemoryWorkbookBackend({}));
     wb.insertSheet(ANALYSIS_TAB).getRange(1, 1).setValue('ANALYSIS PAGE');
     const job: TickerJob = { code: 0, ticker: 'TEST', workbook: wb, timeZone: 'America/New_York', art: { result: { decision: { action: 'Hold' } }, dataQuality: [], chart: { currentPrice: 10 } } as never, chartHtml: null, lockLines: [], produced: new Set([ANALYSIS_TAB]) };
@@ -332,12 +361,13 @@ describe('row 30 — exit plan for a held ticker in Analyze', () => {
     });
     assert.equal(code, 0);
     assert.ok(html.indexOf('═══ TEST ═══') > 0 && html.indexOf('═══ TEST ═══') < html.indexOf('ANALYSIS PAGE'));
-    assert.match(calls[0]!.body.text, /📤 Held · Exit: (HOLD|EXIT|REVIEW|TRIM|TARGET HIT|NO VERDICT)/);
+    assert.deepEqual(calls.map((c) => c.method), ['sendDocument'], 'the PDF only');
+    assert.match(String(calls[0]!.body.caption), /^TEST — Hold: \$10\.00 · held: (HOLD|EXIT|REVIEW|TRIM|TARGET HIT|NO VERDICT)/);
     const failing = fakeTelegram();
     const code2 = await analyzeReportMain(['TEST', '--out', dir], { out: () => {}, err: () => {}, env: { TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_CHAT_ID: '42' } }, {
       run: async () => job, exitPlan: async () => { throw new Error('boom'); }, toPdf: async (_h, p) => { fs.writeFileSync(p, '%PDF'); }, fetchImpl: failing.fetchImpl, now: () => NOW.getTime(),
     });
     assert.equal(code2, 0, 'the report still goes without the plan');
-    assert.ok(!String(failing.calls[0]!.body.text).includes('Held'));
+    assert.ok(!String(failing.calls[0]!.body.caption).includes('held'));
   });
 });

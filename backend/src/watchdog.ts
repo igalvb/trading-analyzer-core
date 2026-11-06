@@ -16,13 +16,12 @@
  *       "Unhandled", "TypeError", ::error:: and stack traces are grouped by message pattern (numbers, tickers and URLs
  *       blanked) and counted. The watchdog's (and ops-verify's) own runs are not scanned (their reports echo the patterns);
  *   (d) the GitHub minutes this month (reports/digest/actionsMinutes.ts, the nightly digest's line).
- * Output: ONE plain Telegram message (✅/⚠️/❌ per job, the top 5 problems with counts and a run link, the minutes
- * line) and the same as rows appended to '🩺 Run Health' in the reports spreadsheet (created with its header when
- * missing). ❌ = failed or did not run; ⚠️ = slow, still running, not yet run, or ERROR-level log lines; warnings are
+ * Output: the full report (✅/⚠️/❌ per job, the top 5 problems with counts and a run link, the minutes line) in the
+ * run log and as rows appended to '🩺 Run Health' in the reports spreadsheet (created with its header when missing).
+ * Telegram (clean policy, notify/policy.ts): NOTHING when every job is ✅; else ONE line (watchdogAlert). ❌ = failed or did not run; ⚠️ = slow, still running, not yet run, or ERROR-level log lines; warnings are
  * counted, not flagged (the Nightly logs routine warnings every night).
  *
- * Never fails loudly: any error of its own (GitHub unreadable, the Sheet refused) is a line in the Telegram message,
- * and the exit code is 0. Only a missing Telegram connection leaves the report in the run log alone.
+ * Never fails loudly: any error of its own (GitHub unreadable, the Sheet refused) is the Telegram line, and the exit code is 0. Only a missing Telegram connection leaves the report in the run log alone.
  *
  * Imports: no profile-reading module at load (workflows/schedule.ts, sheets/*), so a run for another user without a
  * fetched profile still reaches Telegram; the Sheet modules are loaded only when the rows are written.
@@ -30,7 +29,8 @@
 
 import { pathToFileURL } from 'node:url';
 import { unzip } from './net/unzip.ts';
-import { sendMessage, type TelegramDeps } from './notify/telegram.ts';
+import type { TelegramDeps } from './notify/telegram.ts';
+import { notifyIfNeeded } from './notify/policy.ts';
 import { isTradingDay } from './live/marketCalendar.ts';
 import { actionsMinutesLine, wallMinutes } from './reports/digest/actionsMinutes.ts';
 import { finish } from './core/finish.ts';
@@ -232,6 +232,8 @@ const TS = /^﻿?\d{4}-\d\d-\d\dT[\d:.]+Z?\s+/;
 const ERROR_RE = /\b(ERROR|CRITICAL|FATAL)\b|Unhandled|\b(TypeError|ReferenceError|RangeError|SyntaxError)\b|::error::|^##\[error\]/;
 const WARNING_RE = /\bWARN(ING)?\b|degraded|\bfail(ed|ing|ure)?\b|\bpartial(ly)?\b|\bcould not\b|::warning::|^##\[warning\]/i;
 const ZERO_RE = /\b0 (fail(ed|ures?)?|errors?|warnings?)\b|\b(fail(ed|ures?)?|errors?|warnings?)[:=]?\s+0\b/i;
+/** JSON / key=value zero counts (`"warning":0`, `"failed":false`, `errors=0`): blanked before a line is judged. */
+const ZERO_FIELD_RE = /(fail(ed|ures?)?|errors?|warnings?)"?\s*[:=]\s*(0|false)\b/gi;
 const FRAME_RE = /^\s+at\s+\S.*(\(.*:\d+:\d+\)|:\d+:\d+|<anonymous>|native)\s*$/;
 /** Capital words kept when the pattern blanks tickers. */
 const KEEP = new Set(['ERROR', 'WARNING', 'WARN', 'INFO', 'DEBUG', 'CRITICAL', 'FATAL', 'HTTP', 'HTTPS', 'API', 'URL', 'JSON', 'PDF', 'CSV', 'SEC', 'FMP', 'AI', 'UTC', 'ET', 'NY', 'OK', 'ID', 'IV', 'RS', 'ETF', 'GET', 'POST', 'PUT', 'N/A', 'NO', 'TODO']);
@@ -273,18 +275,26 @@ export function scanLog(text: string, into: Map<string, Finding> = new Map()): M
     }
     inTrace = false;
     prev = line;
-    if (ZERO_RE.test(line) && !/\b(ERROR|CRITICAL)\b/.test(line)) continue;
-    if (ERROR_RE.test(line)) add('error', patternOf(line), line.trim());
-    else if (WARNING_RE.test(line)) add('warning', patternOf(line), line.trim());
+    const probe = line.replace(ZERO_FIELD_RE, '');
+    if (ZERO_RE.test(probe) && !/\b(ERROR|CRITICAL)\b/.test(probe)) continue;
+    if (ERROR_RE.test(probe)) add('error', patternOf(line), line.trim());
+    else if (WARNING_RE.test(probe)) add('warning', patternOf(line), line.trim());
   }
   return into;
 }
 
-/** The text of a zip's log files (top-level entries only when the zip also holds per-step copies). */
+/**
+ * The text of a zip's log files (top-level entries only when the zip also holds per-step copies).
+ * A job's artifact holds both out/<job>.log and out/<job>.console.log (the same lines twice): the console copy
+ * is read only when its full log is missing, so each problem is counted once.
+ */
 export function zipText(bytes: Uint8Array): string {
   const entries = unzip(bytes).filter((e) => !e.name.endsWith('/'));
   const top = entries.filter((e) => !e.name.includes('/'));
-  return (top.length ? top : entries).map((e) => e.text()).join('\n');
+  const picked = top.length ? top : entries;
+  const names = new Set(picked.map((e) => e.name));
+  const keep = picked.filter((e) => !(e.name.endsWith('.console.log') && names.has(e.name.slice(0, -'.console.log'.length) + '.log')));
+  return keep.map((e) => e.text()).join('\n');
 }
 
 // ---- the report ----------------------------------------------------------------------------
@@ -418,7 +428,7 @@ export async function buildReport(d: WatchdogDeps, gh: GitHub, w: ReportWindow =
     }
     if (row.errors) row.icon = worse(row.icon, '⚠️');
     const top = [...merged.values()].sort((a, b) => (a.level === b.level ? b.count - a.count : a.level === 'error' ? -1 : 1))[0];
-    if (top) row.topProblem = top.count + '× ' + top.sample;
+    if (top) { row.topProblem = top.count + '× ' + top.sample; if (top.link) row.link = top.link; }
     if (!bits.length) bits.push(running.length === runs.length ? 'running' : 'ok');
     row.result = bits.join('; ');
     rows.push(row);
@@ -501,8 +511,21 @@ export async function appendToReportsSheet(env: Readonly<Record<string, string |
 
 const msgOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** The report text; the sheet rows are appended on the way. Rejects only when GitHub cannot be read at all. */
-async function checkAndRecord(d: WatchdogDeps, log: (line: string) => void): Promise<string> {
+/**
+ * Quiet unless needed (notify/policy.ts): null when every job is ✅ and nothing went wrong on the way (all quiet,
+ * nothing is sent); else ONE line: the worst icon, the top problem and how many more, and where to look.
+ */
+export function watchdogAlert(r: Report): string | null {
+  const worst = r.rows.reduce<Icon>((w, x) => worse(w, x.icon), '✅');
+  if (worst === '✅' && !r.notes.length) return null;
+  const top = r.problems[0];
+  const more = Math.max(0, r.problems.length - 1);
+  const what = top ? top.job + ': ' + top.text.slice(0, 140) : worst === '✅' ? r.notes.join('; ') : (r.rows.find((x) => x.icon === worst)?.job ?? '') + ' ' + (r.rows.find((x) => x.icon === worst)?.result ?? '');
+  return '🩺 ' + (worst === '✅' ? 'ℹ️' : worst) + ' ' + what.trim() + (more ? ' (+' + more + ' more)' : '') + ' — /verify for details' + (top?.link ? ' ' + top.link : '');
+}
+
+/** The report text and its alert line; the sheet rows are appended on the way. Rejects only when GitHub cannot be read at all. */
+async function checkAndRecord(d: WatchdogDeps, log: (line: string) => void): Promise<{ text: string; alert: string | null }> {
   const token = (d.env.GITHUB_TOKEN ?? '').trim(), repo = (d.env.GITHUB_REPOSITORY ?? '').trim();
   if (!token || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('GITHUB_TOKEN / GITHUB_REPOSITORY not set');
   const gh = new GitHub(token, repo, d.fetchImpl);
@@ -514,24 +537,26 @@ async function checkAndRecord(d: WatchdogDeps, log: (line: string) => void): Pro
     (n) => log('watchdog: ' + n + ' row(s) appended to ' + RUN_HEALTH_TAB),
     (e: unknown) => { report.notes.push('Sheet not updated: ' + msgOf(e)); },
   );
-  return reportText(report);
+  return { text: reportText(report), alert: watchdogAlert(report) };
 }
 
-/** The whole check. Never throws; returns the Telegram text it sent (or would have sent). */
+/**
+ * The whole check. Never throws; returns the full report text (the run log has it). Telegram gets ONE line only when
+ * something needs the owner (watchdogAlert); an all-✅ day sends nothing.
+ */
 export async function runWatchdog(d: WatchdogDeps): Promise<string> {
   const log = d.log ?? (() => {});
-  const text = await Promise.resolve().then(() => checkAndRecord(d, log)).then(
-    (t) => t,
-    (e: unknown) => '🩺 Run Health — ❌ the watchdog itself failed: ' + msgOf(e) + '\nThe runs were NOT checked today. Open Actions → Watchdog for the log.',
+  const { text, alert } = await Promise.resolve().then(() => checkAndRecord(d, log)).then(
+    (r) => r,
+    (e: unknown) => ({ text: '🩺 Run Health — ❌ the watchdog itself failed: ' + msgOf(e) + '\nThe runs were NOT checked today. Open Actions → Watchdog for the log.', alert: '🩺 ❌ the watchdog itself failed: ' + msgOf(e) + ' — the runs were NOT checked today (Actions → Watchdog).' } as { text: string; alert: string | null }),
   );
   log(text);
+  if (!alert) { log('watchdog: all ✅, nothing sent to Telegram.'); return text; }
   const tg = (d.env.TELEGRAM_BOT_TOKEN ?? '').trim(), chat = (d.env.TELEGRAM_CHAT_ID ?? '').trim();
   if (!tg || !chat) { log('watchdog: Telegram secrets missing; the report is in this log only.'); return text; }
   const deps: TelegramDeps = { token: tg, ...(d.telegramFetch ? { fetchImpl: d.telegramFetch } : {}) };
-  await sendMessage(deps, chat, redactSecrets(text, d.env)).then(
-    () => log('watchdog: Telegram message sent.'),
-    (e: unknown) => log('watchdog: the Telegram message could not be sent: ' + msgOf(e)),
-  );
+  const sent = await notifyIfNeeded({ deps, chatId: chat }, redactSecrets(alert, d.env), (m) => log('watchdog: the Telegram line could not be sent: ' + m));
+  if (sent) log('watchdog: Telegram alert line sent.');
   return text;
 }
 

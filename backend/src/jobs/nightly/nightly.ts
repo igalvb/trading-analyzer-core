@@ -36,7 +36,8 @@ export const DEFAULT_TICKER_PHASE_BUDGET_MS = 3 * 60 * 60_000;
 
 /**
  * What a job may report. A job that returns nothing is "ok". A job that did part of its work returns
- * state 'degraded' and a plain `reason` (a curated sentence; it is shown in the report).
+ * state 'degraded' and a plain `reason` (a curated sentence; it is shown in the report). An 'ok' job may also give a
+ * `reason` for an expected gap (e.g. tickers skipped for too little history): it goes on the run-summary log line only.
  */
 export interface JobOutcome {
   readonly state?: 'ok' | 'degraded';
@@ -147,7 +148,7 @@ async function runJob(
     degradeStep(ctx, { key: def.id, label: def.label }, why);
     return { id: def.id, label: def.label, state: 'degraded', reason: why, attempts, durationMs };
   }
-  return { id: def.id, label: def.label, state: 'ok', attempts, durationMs };
+  return { id: def.id, label: def.label, state: 'ok', ...(res.value.reason ? { reason: sentence(res.value.reason) } : {}), attempts, durationMs };
 }
 
 interface TickerEntry { readonly ticker: string; readonly sets: TickerSet[] }
@@ -286,6 +287,9 @@ async function runTickerPhase(
   return { step: { id: def.id, label: def.label, state, reason, attempts: 1, durationMs }, tickers, analysed };
 }
 
+/** A run-summary line of a step or ticker that ended ok (buildLogLines: 'step <id> state=ok ...'). */
+const OK_SUMMARY_LINE = /^(step|ticker) \S+ (sets=\S+ )?state=ok\b/;
+
 export async function runNightly(deps: NightlyDeps, options: NightlyOptions = {}): Promise<RunSummary> {
   const ctx = deps.ctx;
   const startedAtMs = ctx.clock.now();
@@ -338,8 +342,9 @@ export async function runNightly(deps: NightlyDeps, options: NightlyOptions = {}
   const rc = ctx.log.runCounts();
   const logCounts = { warning: rc.warning, error: rc.error, critical: rc.critical };
   const summary: RunSummary = { runId: ctx.runId, startedAtMs, finishedAtMs, durationMs: finishedAtMs - startedAtMs, overall, steps, tickers, stepCounts, tickerCounts, logCounts, ...(notes.length ? { notes } : {}), ...(optReads ? { options: optReads } : {}) };
+  // 5 Nov: on a partial night only the overall line and the non-ok lines are WARNINGs; an ok step's line is INFO.
   for (const line of buildLogLines(summary)) {
-    if (overall === 'ok') ctx.log.info(line);
+    if (overall === 'ok' || OK_SUMMARY_LINE.test(line)) ctx.log.info(line);
     else ctx.log.warning(line);
   }
   return summary;

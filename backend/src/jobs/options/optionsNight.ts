@@ -18,7 +18,7 @@ import type { TabCell, TabStore } from '../../storage/tabStore.ts';
 import type { PropertyStore } from '../../storage/kv.ts';
 import type { SnapshotRead } from '../../reports/options/run.ts';
 import {
-  gateRead, optionsNightDay, readOfChain, snapshotReadOf, OPTIONS_READ_APPLIED,
+  gateRead, optionsMarketHours, optionsNightDay, readOfChain, snapshotReadOf, OPTIONS_READ_APPLIED,
   type GatedRead, type OptionsRead, type OptionsShadow,
 } from '../../analysis/options/nightlyRead.ts';
 import { marketReadLine, marketReadOf, MARKET_OPTIONS_ETFS, type MarketOptionsRead } from '../../analysis/options/marketRead.ts';
@@ -131,8 +131,9 @@ export async function runOptionsChains(d: OptionsNightDeps, nightlyStocks: reado
       d.log('options P0 ' + etf + ': ' + r.status + ', ' + mb(r.bytes) + (r.parseMs == null ? '' : ', parse ' + r.parseMs + ' ms') + ', total volume ' + r.totalVolume
         + (r.vixGapPts == null ? '' : ', ATM 30d IV vs VIX ' + (r.vixGapPts >= 0 ? '+' : '') + r.vixGapPts.toFixed(1) + ' pts' + (r.check === 'check' ? ' — CHECK: gap above 5 points, possible parse problem' : '')));
     }
-    const wrote = await recordMarketOptions(d.store, day, market);
-    d.log('market options read: ' + (marketReadLine(market) ?? 'no SPY / QQQ chain tonight') + (wrote ? '' : ' (not stored: no chain, or already stored for ' + day + ')'));
+    const intraday = optionsMarketHours(nowMs, d.timeZone);
+    const wrote = intraday ? 0 : await recordMarketOptions(d.store, day, market);
+    d.log('market options read: ' + (marketReadLine(market) ?? 'no SPY / QQQ chain tonight') + (wrote ? '' : intraday ? ' (not stored: read during market hours; the after-close run stores ' + day + ')' : ' (not stored: no chain, or already stored for ' + day + ')'));
   } catch (e) { d.log('❌ market options read failed (display only; the night goes on): ' + String(e)); }
   // The ETF chains are the largest Cboe serves: dropped once read, unless a stock list needs them.
   for (const etf of MARKET_OPTIONS_ETFS) if (!readTickers.includes(etf)) d.cboe.memo.delete(etf);
@@ -149,8 +150,10 @@ export function shadowInputOf(n: OptionsNight | null, ticker: string): { gated: 
 
 /** options.reads: the light rows with the shadow columns, the snapshots, and the latest read per stock. Returns a log line. */
 export async function recordOptionsNight(
-  d: Pick<OptionsNightDeps, 'store' | 'kv' | 'now' | 'log'>, n: OptionsNight, shadowOf: (t: string) => Promise<OptionsShadow | null>,
+  d: Pick<OptionsNightDeps, 'store' | 'kv' | 'now' | 'log'> & { readonly timeZone?: string }, n: OptionsNight, shadowOf: (t: string) => Promise<OptionsShadow | null>,
 ): Promise<string> {
+  // Owner 2026-11-05: a market-hours run stores nothing (it would take the night's slot from the after-close read).
+  if (d.timeZone && optionsMarketHours(d.now(), d.timeZone)) return 'options reads: not stored for ' + n.day + ' (read during market hours; the after-close run stores this day)';
   const rows: TabCell[][] = [];
   const tonight: OptionsRead[] = [];
   for (const [t, r] of n.reads) {

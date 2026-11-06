@@ -21,7 +21,7 @@ import { accountingOf, fallAlerts, parseRealAccount, shadowAccount, fileAccountS
 import { compareWithPaper, liveLogRows, LIVE_LOG_TAB, LIVE_LOG_HEADER, LIVE_LOG_COLS } from '../src/live/liveLog.ts';
 import { buildFeeReport, liveFeeStats, feeReportSection, feeReportText } from '../src/live/feeReport.ts';
 import { RESEARCH_FEES } from '../src/live/researchFees.ts';
-import { runLiveDryRun, planLiveNight } from '../src/live/liveJob.ts';
+import { runLiveDryRun, planLiveNight, liveAttention, type LiveNight } from '../src/live/liveJob.ts';
 import { liveFeeReportMain } from '../src/live/feeReportCli.ts';
 import { sheetFor, isAllowListedName, PROTECTED_TABS, LIVE_REPORT_TABS } from '../src/sheets/tabs.ts';
 import { NIGHTLY_ORDER, stepDef } from '../src/jobs/nightly/steps.ts';
@@ -442,7 +442,7 @@ describe('1.4 and 1.6: the 💵 Live Log and the nightly dry run', () => {
     return { store, deps, sent };
   }
 
-  test('a night: planned (dry run) rows with the twin\'s reasons and the rail checks, a daily values row, one Telegram message', async () => {
+  test('a night: planned (dry run) rows with the twin\'s reasons and the rail checks, a daily values row; the full text in the log, NOTHING on Telegram (all fine)', async () => {
     const { store, deps, sent } = await setup();
     const out = await runLiveDryRun(deps);
     assert.match(out, /order\(s\) planned, rails OK/);
@@ -454,12 +454,19 @@ describe('1.4 and 1.6: the 💵 Live Log and the nightly dry run', () => {
     const v = log.find((r) => r[1] === 'daily values')!;
     assert.equal(v[12], 1_000); assert.equal(v[13], 0); assert.equal(v[15], 1_000);
     assert.equal(v[16], 1_000, 'the live start is tonight: the twin and the yardsticks start at $1,000 too'); assert.equal(v[17], 1_000); assert.equal(v[18], 1_000);
-    assert.equal(sent.length, 1);
-    assert.match(sent[0]!, /^💵 Live bot \(dry run, \$1,000\) — 2026-11-02, following Trend 200/);
-    assert.match(sent[0]!, /would BUY [0-9.]+ MQZC \(\$333\.33\), [0-9.]+ NVDA .*, [0-9.]+ QQQ .* — rails OK; drift after the plan/);
-    assert.match(sent[0]!, /Twin \$1,000\.00 · 📊 Hold QQQ \$1,000\.00 · 📊 Hold your 14 \$1,000\.00/);
-    assert.match(sent[0]!, /Fee report/);
-    assert.match(sent[0]!, /no broker is connected/);
+    assert.equal(sent.length, 0, 'a normal night needs nothing from the owner: silent (notify/policy.ts)');
+    const logged: string[] = [];
+    const fresh = await setup();
+    await runLiveDryRun({ ...fresh.deps, log: (m: string) => logged.push(m) });
+    // Fix 2026-11-06: the text is logged one line at a time (each line gets its own level).
+    assert.ok(logged.every((l) => !l.includes('\n')), 'one log line per text line');
+    const text = logged.slice(logged.findIndex((l) => l.startsWith('💵 Live bot'))).join('\n');
+    assert.match(text, /^💵 Live bot \(dry run, \$1,000\) — 2026-11-02, following Trend 200/);
+    assert.match(text, /would BUY [0-9.]+ MQZC \(\$333\.33\), [0-9.]+ NVDA .*, [0-9.]+ QQQ .* — rails OK; drift after the plan/);
+    assert.match(text, /Twin \$1,000\.00 · 📊 Hold QQQ \$1,000\.00 · 📊 Hold your 14 \$1,000\.00/);
+    assert.match(text, /Fee report/);
+    assert.match(text, /no broker is connected/);
+    assert.equal(fresh.sent.length, 0);
   });
 
   test('the log is idempotent per day: a re-run writes nothing and sends nothing; the next night starts from the planned positions', async () => {
@@ -470,7 +477,7 @@ describe('1.4 and 1.6: the 💵 Live Log and the nightly dry run', () => {
     assert.equal(again.logged, 0); assert.equal(again.message, null);
     assert.match(again.outcome, /already planned/);
     assert.equal((await store.read(LIVE_LOG_TAB, LIVE_LOG_COLS))!.length, n1);
-    assert.equal(sent.length, 1);
+    assert.equal(sent.length, 0);
     // next night: the twin is unchanged, so the account (the planned orders, as if filled) already matches
     const s = (await import('../src/paper/paperJob.ts'));
     const p = (await s.loadPaper(store))!;
@@ -548,5 +555,18 @@ describe('wiring', () => {
     assert.equal(NIGHTLY_ORDER[NIGHTLY_ORDER.length - 1], 'live.dryRun');
     assert.equal(NIGHTLY_ORDER.indexOf('live.dryRun'), NIGHTLY_ORDER.indexOf('paper.trade') + 1);
     assert.deepEqual(stepDef('live.dryRun').dependsOn, ['paper.trade']);
+  });
+});
+
+describe('live bot: Telegram only when the owner is needed (notify/policy.ts)', () => {
+  const night = (o: Partial<LiveNight>): LiveNight => ({ day: '2026-11-02', account: 'lab.trend200', plan: null, rails: null, logged: 3, message: 'full text', outcome: 'Live bot (dry run) 2026-11-02, lab.trend200: 2 order(s) planned, rails OK', ...o });
+  test('a normal night: null (nothing sent)', () => {
+    assert.equal(liveAttention(night({})), null);
+    assert.equal(liveAttention(night({ day: null })), null);
+  });
+  test('a fall alert, a stale signal, a refused plan: ONE line each', () => {
+    assert.match(liveAttention(night({}), ['⚠️ The live account is 21.0% below its start ($1,000), past the -20% alert. No automatic stop (D5): the owner decides.'])!, /^💵 Live bot 2026-11-02: ⚠️ The live account is 21\.0% below/);
+    assert.match(liveAttention(night({ outcome: 'Live bot (dry run) 2026-11-02, x: refused (stale signal), not logged' }))!, /signal is stale/);
+    assert.match(liveAttention(night({ rails: { planRefusals: ['halted'], orderRefusals: [] } as never }))!, /rails REFUSED the plan: halted/);
   });
 });

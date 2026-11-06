@@ -320,6 +320,12 @@ export interface ExitReadOptions {
   readonly fixedT2?: boolean;
   /** Owner 2026-11-05 (profile exit.weeklyStops): also return the engine's exit-method levels (`exitCandidates`) for the coherent-target check. Default off. */
   readonly weeklyStops?: boolean;
+  /**
+   * Text only: the entry date handed in is an ASSUMED one (no real purchase date on file). The stop-breach reason then
+   * names this basis (e.g. "measured from an assumed purchase date of 1 Jan 2020 (no real date on file)") instead of
+   * claiming "your actual entry". Never changes a number or a decision.
+   */
+  readonly assumedEntryBasis?: string;
 }
 /** The non-excluded confluence exit-method prices (weeklyStops only). */
 function exitCandidatesOf(technical: { confluence?: { allExitMethods?: ReadonlyArray<{ price?: unknown; excluded?: boolean }> } | null }): number[] {
@@ -493,8 +499,8 @@ export function computePositionExitRead(
   let reason: string;
   if (stopBreached) {
     reason = 'Price ($' + cp.toFixed(2) + ') is below the trailing stop ($'
-      + chandelierSinceEntry.toFixed(2) + '), based on the highest high since your actual entry, '
-      + 'not a generic lookback.';
+      + chandelierSinceEntry.toFixed(2) + '), based on the highest high '
+      + (opts.assumedEntryBasis ? opts.assumedEntryBasis + ', not a real purchase date.' : 'since your actual entry, not a generic lookback.');
   } else if (thesisInvalidated) {
     reason = 'The engine now reads AVOID on this ticker — a real change since you entered.';
   } else if (hitT2) {

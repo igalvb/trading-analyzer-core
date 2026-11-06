@@ -80,8 +80,10 @@ async function check(g: FakeGh, now = NOW) {
 describe('watchdog: expected runs', () => {
   test('a missing Nightly -> ❌ did not run (and tonight\'s still-open window -> ⚠️ not yet)', async () => {
     const r = await check({ runs: myOptionsOk() });
-    assert.equal(r.sent.length, 1, 'one Telegram message');
-    assert.equal(r.sent[0], r.text);
+    assert.equal(r.sent.length, 1, 'one Telegram line (clean policy)');
+    assert.ok(!(r.sent[0] as string).includes('\n'), 'one line');
+    assert.match(r.sent[0] as string, /^🩺 ❌ Nightly: Nightly did not run for 2026-11-02 .*\(\+1 more\) — \/verify for details/);
+    assert.ok((r.sent[0] as string).length <= 300);
     assert.match(r.text, /❌ Nightly — did not run/);
     assert.match(r.text, /Nightly did not run for 2026-11-02/);
     assert.match(r.text, /⚠️ Nightly — not yet/);
@@ -180,13 +182,22 @@ describe('watchdog: runs and logs', () => {
   });
 });
 
+describe('watchdog: quiet unless needed (notify/policy.ts)', () => {
+  test('every job ✅ -> NOTHING is sent to Telegram (the report is in the log and the sheet)', async () => {
+    const r = await check({ runs: [run('nightly.yml', '2026-11-03T05:30:00Z', { minutes: 6 }), run('nightly.yml', '2026-11-04T04:10:00Z', { minutes: 6 }), ...myOptionsOk()] });
+    assert.match(r.text, /Everything ran and finished cleanly\./, r.text);
+    assert.deepEqual(r.sent, [], 'all ✅: silent');
+    assert.ok(r.rows.length >= 2, 'the sheet rows are still written');
+  });
+});
+
 describe('watchdog: never fails loudly', () => {
   test('GitHub unreadable -> the failure itself goes to Telegram', async () => {
     const r = await check({ runs: [], fail: true });
     assert.equal(r.sent.length, 1);
     assert.match(r.sent[0] as string, /❌ the watchdog itself failed: GitHub API HTTP 500/);
   });
-  test('the sheet refusing -> still one Telegram message, with a note', async () => {
+  test('the sheet refusing -> one Telegram line, with a note', async () => {
     const gh = fakeGitHub({ runs: myOptionsOk() }), tg = fakeTelegram();
     const text = await runWatchdog({ env: ENV, now: NOW, fetchImpl: gh.fetch, telegramFetch: tg.fetch, appendRows: async () => { throw new Error('quota'); } });
     assert.equal(tg.sent.length, 1);

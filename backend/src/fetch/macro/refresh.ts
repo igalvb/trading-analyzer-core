@@ -43,6 +43,7 @@ import {
 } from '../../analysis/macroRegime.ts';
 import { fetchFredSeriesValues, fetchFredSeriesMacro, fetchM2Macro, FRED_CSV_URL, type MacroLog } from './fred.ts';
 import { readFmpCache, writeFmpCache, isKnownFmp402, noteFmp402 } from '../fundamentals/providers.ts';
+import { isEtfOrFund } from '../etf/kind.ts';
 import { fetchNasdaqShortInterestV1, fetchHistoricalOHLCV, nasdaqHistoricalUrl, parseNasdaqHistorical, NASDAQ_HEADERS } from './nasdaq.ts';
 
 export interface MacroDeps {
@@ -398,6 +399,13 @@ export async function refreshBrokerCourseDataCache(deps: MacroDeps, ticker: stri
     const shortInterest = await fetchNasdaqShortInterestV1(deps.http, ticker, (r) => { nasdaqWhy = r; });
     const interestCoverageRatio = await fetchFMPInterestCoverage(deps, ticker, (r) => { fmpWhy = r; });
     if (shortInterest == null && interestCoverageRatio == null) {
+      // Fix 2026-11-05: an ETF / fund has neither (no short-interest report, no interest coverage): INFO, not a WARNING.
+      // A provider failure (network error, HTTP 429 / 5xx) behind it keeps the WARNING below.
+      const providerFailed = (w: string): boolean => /error|HTTP (?:429|5\d\d)/.test(w);
+      if (log && deps.plainText && isEtfOrFund(ticker) && !providerFailed(nasdaqWhy) && !providerFailed(fmpWhy)) {
+        log('  Broker data cache not written for ' + ticker + ' -- an ETF / fund has no short-interest or interest-coverage data (Nasdaq short interest: ' + nasdaqWhy + '; FMP interest coverage: ' + fmpWhy + ')');
+        return;
+      }
       if (log) log(deps.plainText
         ? '  ⚠ Broker data cache NOT written for ' + ticker + ' -- no data from either source (Nasdaq short interest: ' + nasdaqWhy + '; FMP interest coverage: ' + fmpWhy + '), will retry next run'
         : '  ⚠ Broker data cache NOT written for ' + ticker + ' -- both real fetches failed (Nasdaq + FMP), real transient failure, will retry next run');

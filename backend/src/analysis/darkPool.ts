@@ -290,6 +290,19 @@ export interface RelativeStrengthRanking {
  * a caution only (the strategy is long-only). Null when the ticker is in no
  * category or has too little history; any error is null.
  */
+/** Bars a ticker needs for the relative-strength score: 3 months of 21 trading days, plus 21 for the ATR. */
+export const RELATIVE_STRENGTH_MIN_BARS = 3 * 21 + 21;
+
+/**
+ * Why computeRelativeStrengthRanking returned null for a ticker of the universe: its chart came back but is shorter
+ * than the minimum (an expected gap, e.g. a new listing), or no chart at all (a real miss). Give it the RAW chart
+ * fetch: the cached fetchChart answers null for a chart under 60 bars, so it cannot tell the two apart.
+ */
+export async function relativeStrengthMissKind(deps: Pick<DarkPoolDeps, 'fetchChart'>, ticker: string): Promise<'SHORT_HISTORY' | 'NO_DATA'> {
+  const chart = await chartOf(deps, ticker);
+  return chart && chart.closes && chart.closes.length > 0 && chart.closes.length < RELATIVE_STRENGTH_MIN_BARS ? 'SHORT_HISTORY' : 'NO_DATA';
+}
+
 export async function computeRelativeStrengthRanking(deps: Pick<DarkPoolDeps, 'fetchChart'>, ticker: string): Promise<RelativeStrengthRanking | null> {
   try {
     const categories = Object.keys(DARK_POOL_WATCHLIST).filter((cat) => DARK_POOL_WATCHLIST[cat].indexOf(ticker) > -1);
@@ -300,7 +313,7 @@ export async function computeRelativeStrengthRanking(deps: Pick<DarkPoolDeps, 'f
     const scored: ScoredPeer[] = [];
     for (const t of peers) {
       const chart = await chartOf(deps, t);
-      if (!chart || !chart.closes || chart.closes.length < N_MONTHS * TRADING_DAYS_PER_MONTH + 21) continue;
+      if (!chart || !chart.closes || chart.closes.length < RELATIVE_STRENGTH_MIN_BARS) continue;
       const closes = chart.closes, highs = chart.highs as readonly number[], lows = chart.lows as readonly number[], n = closes.length;
       const idxAgo = n - 1 - N_MONTHS * TRADING_DAYS_PER_MONTH;
       const priceAgo = closes[idxAgo];

@@ -246,6 +246,17 @@ test('overlay: the old stop anchored at a multi-year peak is re-anchored to the 
   assert.equal(o.targets.t1, 210); assert.equal(o.targets.t2, 260);
 });
 
+test('fix 2026-11-06: two calls on one stock bought on different days show the same weekly stop (realEntry false)', () => {
+  const c = chartOf([...wobble(100, 30), ...ramp(100, 400, 300), ...ramp(400, 200, 50), ...wobble(200, 50)]);
+  const at = (k: number) => weeklyOverlay({ chart: c, read: { t1: 210, t2: 900, thesisInvalidated: false, exitCandidates: [] }, entryDay: dayOf(c, c.closes.length - k), realEntry: false, price: c.closes.at(-1)!, fundScore: 60, cost: null, taxRate: 0.25, nowMs: Date.parse('2030-01-01') });
+  assert.equal(at(20).weekly?.stop, at(200).weekly?.stop);
+});
+// the pipeline passes realEntry: false for every option row (exitPipeline.ts)
+test('fix 2026-11-06: the pipeline anchors an option on the underlying, not on its purchase date', async () => {
+  const src = (await import('node:fs')).readFileSync(new URL('../src/jobs/exit/exitPipeline.ts', import.meta.url), 'utf8');
+  assert.match(src, /read: tw, entryDay: [^\n]*, realEntry: false, price: underPrice/);
+});
+
 // ── pipeline + flag ────────────────────────────────────────────────────
 
 test('flag: profile exit.weeklyStops defaults to false and accepts true', () => {

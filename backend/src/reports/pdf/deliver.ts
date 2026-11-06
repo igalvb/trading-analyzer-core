@@ -1,6 +1,7 @@
 /**
- * Shared last mile for the PDF reports: print the HTML to a PDF in out/, then send a short message
- * and the PDF to Telegram (unless sending is off). Used by analyzeReport.ts and exitReportPdf.ts.
+ * Shared last mile for the PDF reports: print the HTML to a PDF in out/, then send the PDF to Telegram (unless sending
+ * is off) with the bottom line as its caption and no separate message (notify/policy.ts, docs/TELEGRAM_POLICY.md).
+ * Used by analyzeReport.ts, exitReportPdf.ts and sendExit.ts.
  */
 
 import { processLine } from '../../core/logFile.ts';
@@ -8,7 +9,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { CliIo } from '../../cli.ts';
 import { findChrome, htmlToPdf } from './chromePdf.ts';
-import { sendMessage, sendDocument, TelegramError, type TelegramDeps } from '../../notify/telegram.ts';
+import type { TelegramDeps } from '../../notify/telegram.ts';
+import { notifyIfNeeded, sendPdfs } from '../../notify/policy.ts';
 
 export interface DeliverDeps {
   readonly toPdf?: (html: string, pdfPath: string) => Promise<void>;
@@ -36,32 +38,33 @@ export function prepareDelivery(io: CliIo, send: boolean, deps: DeliverDeps, usa
   return { send, tg: { token, ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) }, chatId, toPdf };
 }
 
-/** Prints and sends. Returns 0 when everything worked, 1 when the PDF or Telegram failed. */
-export async function deliverPdf(io: CliIo, d: Delivery, o: { label: string; html: string; outDir: string; pdfName: string; message: string; caption: string }): Promise<number> {
+/**
+ * Prints and sends. `caption` is the bottom line (notify/policy.ts bottomLine). When the PDF cannot be made, ONE plain
+ * line (the caption and why). Returns 0 when everything worked, 1 when the PDF or Telegram failed.
+ */
+export async function deliverPdf(io: CliIo, d: Delivery, o: { label: string; html: string; outDir: string; pdfName: string; caption: string }): Promise<number> {
+  const env = io.env ?? process.env;
   fs.mkdirSync(o.outDir, { recursive: true });
   const pdfPath = path.join(o.outDir, o.pdfName);
-  try {
-    await d.toPdf(o.html, pdfPath);
-  } catch (e) {
-    io.out(`${o.label}: the PDF could not be made: ${(e as Error).message}\n`);
+  const tg = { deps: d.tg, chatId: d.chatId };
+  const warn = (what: string) => (m: string): void => { processLine('WARNING', 'deliver', o.label + ': ' + what, { detail: m }, env, (t) => io.err(t)); };
+  const made = await d.toPdf(o.html, pdfPath).then(() => null, (e: unknown) => String((e as Error)?.message ?? e));
+  if (made !== null) {
+    io.out(`${o.label}: the PDF could not be made: ${made}\n`);
     // The report this job exists for was not produced: CRITICAL in the run log (docs/LOGGING_SPEC.md).
-    processLine('CRITICAL', 'deliver', o.label + ': the PDF could not be made', { detail: String((e as Error)?.message ?? e) }, io.env ?? process.env, (t) => io.err(t));
-    if (d.send) await sendMessage(d.tg, d.chatId, o.message + '\n\n⚠️ The PDF could not be made this time.').catch((te: unknown) => { processLine('WARNING', 'deliver', o.label + ': Telegram did not take the no-PDF notice', { detail: String(te) }, io.env ?? process.env, (t) => io.err(t)); });
+    processLine('CRITICAL', 'deliver', o.label + ': the PDF could not be made', { detail: made }, env, (t) => io.err(t));
+    if (d.send) await notifyIfNeeded(tg, '⚠️ ' + o.caption.replace('\n', ' · ') + ' · the PDF could not be made this time.', warn('Telegram did not take the no-PDF notice'));
     return 1;
   }
   io.out(`${o.label}: PDF saved to ${pdfPath} (${Math.round(fs.statSync(pdfPath).size / 1024)} KB).\n`);
-  processLine('INFO', 'deliver', o.label + ': PDF saved', { pdf: pdfPath, bytes: fs.statSync(pdfPath).size, send: d.send }, io.env ?? process.env, (t) => io.err(t));
+  processLine('INFO', 'deliver', o.label + ': PDF saved', { pdf: pdfPath, bytes: fs.statSync(pdfPath).size, send: d.send }, env, (t) => io.err(t));
   if (!d.send) return 0;
-  try {
-    await sendMessage(d.tg, d.chatId, o.message);
-    await sendDocument(d.tg, d.chatId, o.pdfName, fs.readFileSync(pdfPath), 'application/pdf', o.caption);
-    io.out(`${o.label}: sent to Telegram.\n`);
-    return 0;
-  } catch (e) {
-    io.out(`${o.label}: Telegram refused: ${e instanceof TelegramError ? e.message : String(e)}\n`);
-    processLine('ERROR', 'deliver', o.label + ': the PDF was made but Telegram refused it', { detail: String(e), pdf: pdfPath }, io.env ?? process.env, (t) => io.err(t));
-    return 1;
-  }
+  let refusal = '';
+  const sent = await sendPdfs(tg, [{ name: o.pdfName, bytes: new Uint8Array(fs.readFileSync(pdfPath)) }], o.caption, (m) => { refusal = m; });
+  if (sent.length) { io.out(`${o.label}: sent to Telegram.\n`); return 0; }
+  io.out(`${o.label}: Telegram refused: ${refusal}\n`);
+  processLine('ERROR', 'deliver', o.label + ': the PDF was made but Telegram refused it', { detail: refusal, pdf: pdfPath }, env, (t) => io.err(t));
+  return 1;
 }
 
 export const dateStamp = (ms: number): string => new Date(ms).toISOString().slice(0, 10).replace(/-/g, '');

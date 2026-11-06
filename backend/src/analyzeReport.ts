@@ -7,12 +7,11 @@
  *     in reading order (reportTabOrder: Bottom Line, All Models, Analysis, every model, LILO, the comparison,
  *     the Options Decision, the options tabs),
  *     then the price chart;
- *   - a short Telegram message and the PDF, to TELEGRAM_CHAT_ID (skipped with --no-send).
+ *   - the PDF to TELEGRAM_CHAT_ID with the bottom line as its caption, no separate message (skipped with --no-send).
  * Row 30: when the ticker is on the Portfolio sheet, its exit plan (the nightly's Exit step for that holding alone,
- * reports/exitPlan.ts) is the first page after the cover, and the message says the action.
+ * reports/exitPlan.ts) is the first page after the cover, and the caption says the action.
  * Owner 2026-11-01: with the AI on, Claude Opus gives a second opinion on Gemini's review (ai/analyzeOpus.ts; off with
- * --no-opus): its text sits under Gemini's on the Analysis page (Sheet and PDF), its one-line summary is on the cover and
- * in the Telegram message. No key: one plain line, the run goes on. Display only.
+ * --no-opus): its text sits under Gemini's on the Analysis page (Sheet and PDF), its one-line summary is on the cover. No key: one plain line, the run goes on. Display only.
  * The PDF is also saved to out/ (the workflow keeps it as an artifact).
  * Nothing here computes a score: the PDF shows the cells the run wrote.
  * Exit: 0 done, 1 the analysis aborted or the PDF/Telegram failed, 2 usage or configuration.
@@ -27,6 +26,7 @@ import { ANALYSIS_TAB, MODEL_TABS } from './analysis/runTicker.ts';
 import { BOTTOM_LINE_TAB } from './reports/bottomLine/summarySheet.ts';
 import { OptionsTabs } from './reports/options/tabs.ts';
 import { tabHtml, reportDocument, type ReportCover } from './reports/pdf/workbookHtml.ts';
+import { bottomLine } from './notify/policy.ts';
 import { prepareDelivery, deliverPdf, dateStamp, type DeliverDeps } from './reports/pdf/deliver.ts';
 import type { ReportSheet } from './sheets/reportSheet.ts';
 import { heldExitPlan, type HeldExitPlan } from './reports/exitPlan.ts';
@@ -89,18 +89,21 @@ export function reportHtml(job: TickerJob, nowMs: number, exitPlan: HeldExitPlan
   return reportDocument(cover, sections, job.chartHtml);
 }
 
-/** The Telegram text: one screen, plain words. */
-export function telegramSummary(job: TickerJob, exitPlan: HeldExitPlan | null = null): string {
+/**
+ * The Telegram caption, the bottom line (notify/policy.ts; no separate message): "TSLA — Buy · 72/100 · Buy now ·
+ * $250.00 · held: HOLD" and the headline on a second line. Opus's summary and the rest are on the PDF's cover.
+ */
+export function telegramCaption(job: TickerJob, exitPlan: HeldExitPlan | null = null): string {
   const v = verdictOf(job);
-  return [
-    `📊 ${job.ticker} — ${v.action}`,
-    `Conviction ${v.conviction} · ${v.timing}`,
-    `Fundamentals ${v.fundamentals} · Price ${v.price}`,
-    ...(exitPlan ? [`📤 Held · Exit: ${exitPlan.actions.join(' / ') || '—'}`] : []),
-    ...(v.headline ? ['', v.headline] : []),
-    ...(job.art?.opusReview ? ['', '🧠 ' + job.art.opusReview.summary] : []),
-    '', 'Full report in the PDF below.',
-  ].join('\n');
+  return bottomLine(`${job.ticker} — ${v.action}`, [v.conviction !== '—' ? v.conviction : null, v.timing !== '—' ? v.timing : null, v.price !== '—' ? v.price : null, exitPlan ? 'held: ' + (exitPlan.actions.join(' / ') || '—') : null], v.headline || null);
+}
+
+/** The run log's one-line result: verdict, conviction, timing, price, entry zone, stop and reward to risk. */
+export function resultFields(job: TickerJob): Record<string, string | number | null> {
+  const v = verdictOf(job);
+  const tp = (job.art?.result as { techPlan?: { entryLow?: unknown; entryHigh?: unknown; stop?: unknown; rrToT1?: unknown } } | undefined)?.techPlan;
+  const n = (x: unknown): number | null => (typeof x === 'number' && Number.isFinite(x) ? Math.round(x * 100) / 100 : null);
+  return { verdict: v.action, conviction: v.conviction, timing: v.timing, price: v.price, entryLow: n(tp?.entryLow), entryHigh: n(tp?.entryHigh), stop: n(tp?.stop), rrToT1: n(tp?.rrToT1) };
 }
 
 export interface AnalyzeReportDeps extends DeliverDeps {
@@ -123,6 +126,9 @@ export async function analyzeReportMain(argv: readonly string[], io: CliIo = STD
   const job = await (deps.run ?? ((a, i) => runTickerJob(a, i)))(passOn, { ...io, out: (s) => io.err(s) });
   if (!job.workbook) { io.out(`${ticker}: the analysis did not run (details in the log).\n`); return job.code || 1; }
 
+  // Fix 2026-11-06: the run log carries the bottom line and the levels (they were only in the PDF), so a batch of runs
+  // can be read back from the logs (e.g. buy zones for the whole list on a sharp-drop day).
+  processLine('INFO', 'analyze:' + ticker, 'result', resultFields(job), io.env ?? process.env, (t) => io.err(t));
   const now = (deps.now ?? Date.now)();
   const plan = await (deps.exitPlan ?? ((j: TickerJob) => (j.services ? heldExitPlan(j.services, j.ticker, j.art) : Promise.resolve(null))))(job).catch((e) => {
     processLine('WARNING', 'analyze:' + ticker, 'exit plan not added to the report', { detail: String(e) }, io.env ?? process.env, (t) => io.err(t));
@@ -131,7 +137,7 @@ export async function analyzeReportMain(argv: readonly string[], io: CliIo = STD
   const sent = await deliverPdf(io, d, {
     label: ticker, html: reportHtml(job, now, plan), outDir,
     pdfName: `v13-report-${ticker.replace(/[^A-Z0-9.-]/g, '_')}-analysis-${dateStamp(now)}.pdf`,
-    message: telegramSummary(job, plan), caption: `${job.ticker} full report`,
+    caption: telegramCaption(job, plan),
   });
   return sent || job.code;
 }

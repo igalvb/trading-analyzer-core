@@ -9,13 +9,15 @@
  * default, effort high) asks for a short table: problem -> likely root cause -> severity -> concrete fix -> needs
  * the owner? The prompt is redacted (redactSecrets) and capped at PROMPT_MAX_CHARS, most severe first.
  *
- * Telegram: the watchdog table for those days, then Opus's answer (split into 4096-character parts). No Anthropic
- * key: the table and one line (VERIFY_NO_KEY). Never throws; every error of its own is a line in the message.
+ * Telegram (clean policy, notify/policy.ts): ONE PDF (the watchdog table for those days and Opus's answer) with the
+ * bottom line as its caption; without a browser, ONE message (the bottom line and Opus's answer). No Anthropic key:
+ * the table and one line (VERIFY_NO_KEY). Never throws; every error of its own is a line in the message.
  * Read-only: it changes no code, no workflow and no sheet except one 'Verify' row appended to '🩺 Run Health'.
  */
 
 import { pathToFileURL } from 'node:url';
 import { sendMessage, type TelegramDeps } from './notify/telegram.ts';
+import { bottomLine, sendPdfs } from './notify/policy.ts';
 import { finish } from './core/finish.ts';
 import {
   GitHub, RUN_HEALTH_TAB, appendToReportsSheet, buildReport, duration, fileOf, isFailed, reportText,
@@ -160,6 +162,8 @@ export interface VerifyDeps {
   readonly fetchImpl?: GhFetch;
   /** Telegram's fetch (tests: a fake). */
   readonly telegramFetch?: typeof fetch;
+  /** HTML to PDF; default: headless Chrome when found (reports/pdf/chromePdf.ts). null = no PDF: one message instead. */
+  readonly toPdf?: ((html: string, pdfPath: string) => Promise<void>) | null;
   /** The Claude SDK (tests: a fake); default: the real one with the env key. */
   readonly sdk?: ClaudeSdk;
   /** The '🩺 Run Health' rows (header left out); default: the reports spreadsheet. */
@@ -245,7 +249,35 @@ async function verifyInner(d: VerifyDeps, log: (line: string) => void): Promise<
   return result;
 }
 
-/** The whole verification. Never throws; returns what it sent (or would have sent) to Telegram. */
+/** The bottom line: "🩺 Verify (3 days): <Opus's VERDICT>" or, without one, the watchdog's own overall line. */
+export function verifyCaption(res: VerifyResult, days: number): string {
+  const verdict = /VERDICT:?\s*([^\n]*)/i.exec(res.messages[res.messages.length - 1] ?? '')?.[1]?.trim() ?? '';
+  const first = res.messages[0] ?? '';
+  const overall = res.state === 'collect-failed' ? first.split('\n')[0]?.replace(/^🩺 Verify — /, '') ?? '' : (first.split('\n')[1] ?? '');
+  const why = res.state === 'no-key' ? VERIFY_NO_KEY : res.state === 'opus-failed' ? 'Opus diagnosis not available this time' : '';
+  return bottomLine('🩺 Verify (' + days + ' days)', [verdict || overall], why || null);
+}
+
+const defaultToPdf = async (env: Readonly<Record<string, string | undefined>>): Promise<((html: string, pdfPath: string) => Promise<void>) | null> => {
+  const { findChrome, htmlToPdf } = await import('./reports/pdf/chromePdf.ts');
+  const chrome = findChrome(env);
+  return chrome ? (html, p) => htmlToPdf(html, p, chrome) : null;
+};
+
+/** The result as one PDF (the table and Opus's answer on the cover); null when it could not be made. */
+async function verifyPdf(res: VerifyResult, toPdf: (html: string, pdfPath: string) => Promise<void>, now: number, log: (l: string) => void): Promise<Uint8Array | null> {
+  const { reportDocument } = await import('./reports/pdf/workbookHtml.ts');
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const html = reportDocument({ title: 'Verify — run health', subtitle: new Date(now).toISOString().slice(0, 16).replace('T', ' ') + ' UTC', facts: [], lines: [res.messages.join('\n\n')] }, [], null);
+  const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'verify-')), 'verify.pdf');
+  return toPdf(html, p).then(() => new Uint8Array(fs.readFileSync(p)), (e: unknown) => { log('verify: the PDF could not be made (one message instead): ' + msgOf(e)); return null; });
+}
+
+/**
+ * The whole verification. Never throws; returns what it found. /verify is asked for by the owner, so it always answers
+ * (notify/policy.ts): ONE PDF with the bottom line as its caption when a browser is there, else ONE message (the bottom
+ * line, and Opus's diagnosis when there is one).
+ */
 export async function runVerify(d: VerifyDeps): Promise<VerifyResult> {
   const log = d.log ?? (() => {});
   const raw = await Promise.resolve().then(() => verifyInner(d, log)).then(
@@ -257,13 +289,19 @@ export async function runVerify(d: VerifyDeps): Promise<VerifyResult> {
   for (const m of res.messages) log(m);
   const tg = (d.env.TELEGRAM_BOT_TOKEN ?? '').trim(), chat = (d.env.TELEGRAM_CHAT_ID ?? '').trim();
   if (!tg || !chat) { log('verify: Telegram secrets missing; the result is in this log only.'); return res; }
-  const deps: TelegramDeps = { token: tg, ...(d.telegramFetch ? { fetchImpl: d.telegramFetch } : {}) };
-  for (const m of res.messages) {
-    await sendMessage(deps, chat, m).then(
-      (n) => log('verify: Telegram message sent (' + n + ' part(s)).'),
-      (e: unknown) => log('verify: a Telegram message could not be sent: ' + redactSecrets(msgOf(e), d.env)),
-    );
+  const target = { deps: { token: tg, ...(d.telegramFetch ? { fetchImpl: d.telegramFetch } : {}) } as TelegramDeps, chatId: chat };
+  const caption = redactSecrets(verifyCaption(res, verifyDays(d.env)), d.env);
+  const toPdf = d.toPdf !== undefined ? d.toPdf : await defaultToPdf(d.env).catch(() => null);
+  const pdf = toPdf ? await verifyPdf(res, toPdf, d.now, log) : null;
+  if (pdf) {
+    const sent = await sendPdfs(target, [{ name: 'verify-' + new Date(d.now).toISOString().slice(0, 10).replace(/-/g, '') + '.pdf', bytes: pdf }], caption, (m) => log('verify: ' + redactSecrets(m, d.env)));
+    if (sent.length) { log('verify: Telegram PDF sent.'); return res; }
   }
+  const text = caption + (res.state === 'ok' ? '\n\n' + (res.messages[res.messages.length - 1] ?? '') : '');
+  await sendMessage(target.deps, chat, text).then(
+    (n) => log('verify: Telegram message sent (' + n + ' part(s)).'),
+    (e: unknown) => log('verify: the Telegram message could not be sent: ' + redactSecrets(msgOf(e), d.env)),
+  );
   return res;
 }
 

@@ -1,7 +1,7 @@
 /**
  * The nightly step 'paper.trade': runs one day of the 1-year paper test (paper/paperTrading.ts) from tonight's
  * analysis, stores the state in the '📝 Paper State' tab (JSON in chunks), rewrites the '📝 Paper Trading' tab
- * and, on a trade day or a Friday, sends a short summary to Telegram.
+ * and sends the daily PDF to Telegram with its bottom line as the caption (no message; notify/policy.ts).
  * The engine reads come from the nightly's shared analysis cache, so a stock is analysed once per night.
  * Missed nights (2026-11-04: no nightly ran 2-4 Nov) are caught up first, oldest first, each on the bars up to its
  * own close with the engine run point in time (runEngineDay; no fundamentals, AI or macro archive, as in the
@@ -25,8 +25,9 @@ import { barTimeZone } from '../backtest/data.ts';
 import { recordChainNight } from './chainSnapshot.ts';
 import { selectRecommendedCall } from '../analysis/options/conviction.ts';
 import { jamesCallsOf, selectJamesLeaps, type JamesCall } from '../analysis/options/leapsPick.ts';
-import { sendMessage, sendDocument, type TelegramDeps } from '../notify/telegram.ts';
-import { dailyReportHtml, dailyMessage } from './paperReport.ts';
+import type { TelegramDeps } from '../notify/telegram.ts';
+import { bottomLine, sendPdfs } from '../notify/policy.ts';
+import { dailyReportHtml } from './paperReport.ts';
 import { EXIT_TAX_PCT } from '../portfolio/exitTax.ts';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -49,7 +50,7 @@ export interface PaperJobDeps {
   readonly now?: () => number;
   /** Telegram, when set up. */
   readonly telegram?: { readonly deps: TelegramDeps; readonly chatId: string } | null;
-  /** HTML to PDF (headless Chrome) for the daily report; without it the page is sent as an HTML file. */
+  /** HTML to PDF (headless Chrome) for the daily report; without it nothing is sent (the tab holds it all). */
   readonly toPdf?: ((html: string, pdfPath: string) => Promise<void>) | null;
   /** Cboe's option chains, for the LEAPS accounts; without it they wait. */
   readonly cboe?: CboeDeps | null;
@@ -179,23 +180,29 @@ export function telegramText(p: StoredPaper, today: readonly PaperTrade[]): stri
   return lines.join('\n');
 }
 
-/** The daily file (PDF when a browser is there, else the HTML page itself) and the short message. */
+/**
+ * The bottom line of the daily PDF (its caption; notify/policy.ts): "Paper test 2026-11-05: best Turtle +7.5% · QQQ
+ * +1.8% · 3 trade(s)".
+ */
+export function paperCaption(state: PaperState, stockTrades: number): string {
+  const st = standings(state);
+  const best = st.find((r) => !r.bench);
+  const qqq = st.find((r) => r.key === 'qqq');
+  return bottomLine('Paper test ' + state.lastDay, [best ? 'best ' + best.name + ' ' + pctOf(best.value) : null, qqq ? 'QQQ ' + pctOf(qqq.value) : null, stockTrades ? stockTrades + ' trade(s)' : null]);
+}
+
+/** The daily PDF with its bottom line as the caption, no message. No browser or no PDF: nothing is sent (logged). */
 async function sendDailyReport(d: PaperJobDeps, state: PaperState, closeOf: (t: string) => number | null, trades: readonly PaperTrade[]): Promise<void> {
   const tg = d.telegram!;
-  const html = dailyReportHtml(state, closeOf);
   const name = 'paper-test-' + state.lastDay;
+  if (!d.toPdf) { d.log('paper test: no browser, so no PDF tonight (the 📝 Paper Trading tab has it all)'); return; }
+  const html = dailyReportHtml(state, closeOf);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-'));
+  const pdf = path.join(dir, name + '.pdf');
+  const made = await d.toPdf(html, pdf).then(() => true, (e: unknown) => { d.log('paper test: the PDF could not be made (nothing sent): ' + String(e)); return false; });
+  if (!made) return;
   const stockTrades = trades.filter((t) => t.ticker !== 'QQQ').length;
-  await sendMessage(tg.deps, tg.chatId, dailyMessage(state) + (stockTrades ? '\n' + stockTrades + ' trade(s) today (see 📒 Paper Log).' : ''));
-  if (d.toPdf) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-'));
-    const pdf = path.join(dir, name + '.pdf');
-    try {
-      await d.toPdf(html, pdf);
-      await sendDocument(tg.deps, tg.chatId, name + '.pdf', fs.readFileSync(pdf), 'application/pdf', 'Paper test ' + state.lastDay);
-      return;
-    } catch (e) { d.log('paper test: the PDF could not be made, sending the page instead: ' + String(e)); }
-  }
-  await sendDocument(tg.deps, tg.chatId, name + '.html', new TextEncoder().encode(html), 'text/html', 'Paper test ' + state.lastDay + ' (open in a browser)');
+  await sendPdfs(tg, [{ name: name + '.pdf', bytes: new Uint8Array(fs.readFileSync(pdf)) }], paperCaption(state, stockTrades), (m) => d.log('paper test: ' + m));
 }
 
 /** One night. Returns a plain outcome line. */
@@ -312,7 +319,7 @@ export async function runPaperNight(d: PaperJobDeps): Promise<string> {
   await d.store.ensure(PAPER_TAB);
   await d.store.clear(PAPER_TAB);
   await d.store.write(PAPER_TAB, 1, paperTabRows(stored));
-  // The daily report (owner 2026-10-28): every trading night, a short message and the full file.
+  // The daily report (owner 2026-10-28; clean policy 2026-11-05): every trading night, the PDF only.
   if (d.telegram && stored.state.marks.length) {
     const closeOf = (t: string): number | null => bars[t]?.close ?? null;
     await sendDailyReport(d, stored.state, closeOf, allTrades).catch((e) => d.log('paper test: Telegram failed: ' + String(e)));

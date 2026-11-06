@@ -34,7 +34,8 @@ export interface FetchStepSpec {
   /**
    * Fix 2026-11-04: a source that may simply have nothing for some tickers (no provider failure seen). When set, a
    * plain "no data" end is ONE WARNING (`<source> found no data [NO_DATA_FOR_TICKER]: <note>`) instead of a
-   * per-attempt WARNING plus an ERROR. A throw or a provider failure is still logged as before.
+   * per-attempt WARNING plus an ERROR; INFO when every request was a 404 (fix 2026-11-05). A throw or a provider
+   * failure is still logged as before.
    */
   readonly noDataNote?: string;
 }
@@ -99,7 +100,11 @@ export async function fetchStep<T>(deps: FetchStepDeps, spec: FetchStepSpec, fn:
   }
   const reason = reasonFromSignal(lastEvents, lastThrown);
   if (spec.noDataNote && lastThrown == null && reason === 'NO_DATA_FOR_TICKER') {
-    ctx.log.warning(spec.source + ' found no data [' + reason + ']: ' + spec.noDataNote, { key: spec.key });
+    // Fix 2026-11-05: when EVERY request was answered 404 (e.g. a new issuer SEC has no concept for yet), the source
+    // said plainly "nothing here": INFO. Anything else behind the null (no HTTP seen, another status) stays a WARNING;
+    // a throw or a provider failure never reaches this branch.
+    const all404 = lastEvents.length > 0 && lastEvents.every((e) => e.status === 404);
+    ctx.log[all404 ? 'info' : 'warning'](spec.source + ' found no data [' + reason + ']: ' + spec.noDataNote, { key: spec.key });
   } else ctx.log.error(spec.source + ' gave up: ' + (lastThrown != null ? messageOf(lastThrown) : 'no data') + ' [' + reason + ']', { key: spec.key });
   return { ok: false, value: null, attempts: tried, reason, quality: qualityFor(spec.key, reason, new Date(ctx.clock.now()), { label: spec.label, effect: spec.effect }) };
 }

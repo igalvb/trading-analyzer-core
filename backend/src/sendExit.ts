@@ -1,10 +1,10 @@
 /**
  * `npm run send-exit [-- --ai-status] [--no-send] [--out DIR]` (Telegram /exit, owner 2026-10-27).
  *
- * Sends the SAVED Exit Report (as the last nightly, and AI run if any, left it on the Sheet) as a PDF with a short
- * message. Nothing is re-run. `--ai-status` only prints "missing" when the AI section still holds the placeholder
+ * Sends the SAVED Exit Report (as the last nightly, and AI run if any, left it on the Sheet) as a PDF, the bottom line
+ * as its caption and no separate message (notify/policy.ts). Nothing is re-run. `--ai-status` only prints "missing" when the AI section still holds the placeholder
  * (the workflow then runs the Exit AI first), else "present".
- * Plan #47: when the saved AI section holds the portfolio view by Claude Opus, the message carries it too.
+ * Plan #47: the portfolio view by Claude Opus is in the PDF (the saved AI section); the caption carries its first line.
  * Exit: 0 done, 1 the tab could not be read or sent, 2 configuration.
  */
 
@@ -16,6 +16,7 @@ import { formatLine, LogLevel } from './core/logger.ts';
 import { EXIT_SHEET_TAB, AI_PLACEHOLDER, PORTFOLIO_VIEW_TITLE } from './reports/exitSheet/text.ts';
 import { reportDocument } from './reports/pdf/workbookHtml.ts';
 import { sheetGridHtml, sheetHasText, sheetFindText } from './reports/pdf/sheetGridHtml.ts';
+import { bottomLine } from './notify/policy.ts';
 import { prepareDelivery, deliverPdf, dateStamp, type DeliverDeps } from './reports/pdf/deliver.ts';
 import type { sheets_v4 } from 'googleapis';
 
@@ -25,7 +26,7 @@ export interface SendExitDeps extends DeliverDeps {
   readonly now?: () => number;
 }
 
-/** Telegram room for the portfolio view inside the /exit message. */
+/** The saved portfolio view is read up to this length (the /exit caption uses its first line; the PDF has it all). */
 export const SAVED_PORTFOLIO_VIEW_MAX_CHARS = 3000;
 
 /** Plan #47: the saved portfolio view (its title row, then column A until the first holding's row), or null. */
@@ -41,6 +42,12 @@ export function savedPortfolioView(tab: sheets_v4.Schema$Sheet): string | null {
   if (!out.length) return null;
   const text = out.join('\n');
   return '📊 ' + PORTFOLIO_VIEW_TITLE + '\n' + (text.length > SAVED_PORTFOLIO_VIEW_MAX_CHARS ? text.slice(0, SAVED_PORTFOLIO_VIEW_MAX_CHARS) + ' … (the rest is in the PDF)' : text);
+}
+
+/** The bottom line: "Exit Report (from 5 Nov 2026 21:10)" and, when saved, the portfolio view's first line. */
+export function savedExitCaption(runTime: string, view: string | null): string {
+  const first = view ? (view.split('\n').slice(1).find((l) => l.trim()) ?? '') : '';
+  return bottomLine('Exit Report' + (runTime ? ' (from ' + runTime + ')' : ''), [], first ? '📊 ' + first : null);
 }
 
 export async function sendExitMain(argv: readonly string[], io: CliIo = STD_IO, deps: SendExitDeps = {}): Promise<number> {
@@ -69,8 +76,7 @@ export async function sendExitMain(argv: readonly string[], io: CliIo = STD_IO, 
   return deliverPdf(io, d, {
     label: 'Exit report (saved)', outDir, pdfName: `v13-report-exit-saved-${dateStamp(now)}.pdf`,
     html: reportDocument({ title: 'Exit Strategy Report', subtitle: runTime ? 'Report from ' + runTime : 'Saved report', facts: [], lines: ['As saved on the Sheet by the last run, with its AI section.'] }, [section], null),
-    message: ['📤 Exit Report' + (runTime ? ' (from ' + runTime + ')' : ''), '', ...(view ? [view, ''] : []), 'Full report in the PDF below.'].join('\n'),
-    caption: 'Exit Strategy Report',
+    caption: savedExitCaption(runTime, view),
   });
 }
 

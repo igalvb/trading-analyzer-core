@@ -58,17 +58,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Check out the long price history (docs/LONG_HISTORY_PLAN.md; a missing branch is skipped)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         continue-on-error: true
         with:
           ref: prices
           path: long-history
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '24'
           cache: 'npm'
@@ -169,7 +169,7 @@ jobs:
 
       - name: Upload the PDF and log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: analyze-${{ github.run_id }}
           path: |

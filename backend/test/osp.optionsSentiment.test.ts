@@ -17,7 +17,7 @@ import { saveOptionsSnapshot, OPTIONS_SNAPSHOT_SHEET } from '../src/reports/opti
 import { readOptionsSnapshot } from '../src/reports/options/run.ts';
 import { analyzeOptionsForScoring } from '../src/analysis/options/scoring.ts';
 import {
-  checksOf, computeOptionsShadow, confirmOf, deltaDollarBias, gateRead, optionsNightDay, readOfChain, shadowLine, snapshotReadOf,
+  checksOf, computeOptionsShadow, confirmOf, deltaDollarBias, gateRead, optionsMarketHours, optionsNightDay, readOfChain, shadowLine, snapshotReadOf,
   tradingDaysBetween, OPTIONS_READ_APPLIED, type OptionsRead,
 } from '../src/analysis/options/nightlyRead.ts';
 import { hedgingRead, marketReadLine, marketReadOf, skewAt } from '../src/analysis/options/marketRead.ts';
@@ -168,6 +168,12 @@ describe('A-5: dates and the staleness gate (weekdays, no holiday calendar)', ()
     assert.equal(optionsNightDay(NOW, TZ), '2026-10-29', '23:23 New York Thursday');
     assert.equal(optionsNightDay(Date.UTC(2026, 9, 31, 3, 23), TZ), '2026-10-30', 'a Friday-night run');
     assert.equal(optionsNightDay(Date.UTC(2026, 10, 1, 3, 23), TZ), '2026-10-30', 'Saturday night -> Friday');
+    // Owner 2026-11-05: a market-hours run must not take the night's slot (seen 4 Nov 10:03 New York).
+    assert.equal(optionsMarketHours(Date.UTC(2026, 10, 4, 15, 3), TZ), true, 'Wed 10:03 New York');
+    assert.equal(optionsMarketHours(Date.UTC(2026, 10, 5, 3, 23), TZ), false, 'the nightly, 22:23 New York');
+    assert.equal(optionsMarketHours(Date.UTC(2026, 10, 4, 13, 0), TZ), false, '08:00 New York');
+    assert.equal(optionsMarketHours(Date.UTC(2026, 10, 7, 16, 0), TZ), false, 'Saturday noon');
+    assert.equal(optionsMarketHours(NOW, TZ), false);
     assert.equal(optionsNightDay(Date.UTC(2026, 9, 30, 5, 30), TZ), '2026-10-29', '01:30 Friday is still Thursday\'s session');
   });
 
@@ -221,6 +227,9 @@ describe('A-3: the two append-only tabs, written once per day', () => {
     const snaps = readOptionsSnapshotRows((await store.read(OPTIONS_READ_SNAPSHOTS_TAB, 4))!);
     assert.deepEqual(snaps.get('AAA')!.get('2026-10-29')!.rows, night.reads.get('AAA')!.rows);
     assert.match(await recordOptionsNight({ store, kv, now: () => NOW, log: () => {} }, night, async () => null), /already stored/);
+    const day = new MemoryTabStore();
+    assert.match(await recordOptionsNight({ store: day, kv, now: () => Date.UTC(2026, 10, 4, 15, 3), log: () => {}, timeZone: TZ }, night, async () => null), /not stored .*market hours/);
+    assert.equal(await day.read(OPTIONS_READS_TAB, OPTIONS_READS_HEADER.length), null, 'a market-hours run writes no rows');
     assert.equal((await store.read(OPTIONS_READS_TAB, 3))!.length, 3);
   });
 

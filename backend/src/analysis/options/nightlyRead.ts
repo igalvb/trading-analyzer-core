@@ -243,6 +243,18 @@ export function optionsNightDay(nowMs: number, timeZone: string): string {
   return ymd(ms);
 }
 
+/**
+ * Owner 2026-11-05 (bug seen 4 Nov): true while the US market is open (weekday 09:30-16:15 in `timeZone`, the
+ * script's New York zone). A run then (a manual daytime run) reads an intraday chain under today's label; storing
+ * it would take the night's slot (rows are written once per day) and block the proper after-close read.
+ */
+export function optionsMarketHours(nowMs: number, timeZone: string): boolean {
+  const day = new Date(nowMs).toLocaleDateString('en-US', { timeZone, weekday: 'short' });
+  if (day === 'Sat' || day === 'Sun') return false;
+  const hm = new Date(nowMs).toLocaleTimeString('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  return hm >= '09:30' && hm < '16:15';
+}
+
 /** Weekdays d with from < d <= to (0 when to <= from). */
 export function tradingDaysBetween(from: string, to: string): number {
   let n = 0;

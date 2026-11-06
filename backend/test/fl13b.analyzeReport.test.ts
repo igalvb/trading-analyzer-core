@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ReportWorkbook, MemoryWorkbookBackend } from '../src/sheets/reportSheet.ts';
 import { tabHtml, displayValue } from '../src/reports/pdf/workbookHtml.ts';
-import { analyzeReportMain, reportTabOrder, reportHtml, telegramSummary } from '../src/analyzeReport.ts';
+import { analyzeReportMain, reportTabOrder, reportHtml, telegramCaption } from '../src/analyzeReport.ts';
 import { ANALYSIS_TAB } from '../src/analysis/runTicker.ts';
 import { OptionsTabs } from '../src/reports/options/tabs.ts';
 import { BOTTOM_LINE_TAB } from '../src/reports/bottomLine/summarySheet.ts';
@@ -68,7 +68,7 @@ describe('FL-13b — Analyze report', () => {
     assert.ok(!order.includes(OptionsTabs.PUTS) && !order.includes(OptionsTabs.LOG));
   });
 
-  test('end to end: PDF saved, summary and PDF sent to Telegram; the key never printed', async () => {
+  test('end to end: PDF saved, only the PDF sent to Telegram (bottom line as its caption); the key never printed', async () => {
     const job = await sampleJob();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fl13b-'));
     const { calls, fetchImpl } = fakeTelegram();
@@ -85,8 +85,11 @@ describe('FL-13b — Analyze report', () => {
     assert.match(html, /56\/100/);
     assert.match(html, /Wait for pullback/);
     assert.ok(!html.includes('puts') && !html.includes('log line'), 'only report tabs');
-    assert.deepEqual(calls.map((c) => c.method), ['sendMessage', 'sendDocument']);
-    assert.match(telegramSummary(job), /TSLA — 🚫 Skip/);
+    assert.deepEqual(calls.map((c) => c.method), ['sendDocument'], 'no text message (clean policy)');
+    const caption = String((calls[0]!.body as FormData).get('caption'));
+    assert.equal(caption, telegramCaption(job));
+    assert.match(caption, /^TSLA — 🚫 Skip: 56\/100 · Wait for pullback/);
+    assert.ok(caption.length <= 200 && caption.split('\n').length <= 2, 'bottom line: 2 lines, ~200 chars');
     assert.ok(!(out.join('') + err.join('')).includes(TOKEN));
   });
 

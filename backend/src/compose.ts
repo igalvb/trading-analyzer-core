@@ -33,7 +33,7 @@ import { runLogSink } from './core/logFile.ts';
 import { scriptTimeZone } from './core/dates.ts';
 import { HttpClient, LiveTransport, type HttpTransport } from './net/http.ts';
 import { TappingTransport } from './net/httpTap.ts';
-import { secUserAgentsFromEnv, fetchSecEdgarCIK, fetchSharesOutstandingHistory, fetchSecFilingKeywordHits } from './fetch/sec/edgar.ts';
+import { secUserAgentsFromEnv, fetchSecEdgarCIK, fetchSharesOutstandingHistory, fetchSecFilingKeywordHits, KEYWORD_SEARCH_RETRIES, type KeywordSearchOptions } from './fetch/sec/edgar.ts';
 import { fetch13FCusip, fetchInstitutional13FHoldings } from './fetch/sec/thirteenF.ts';
 import { fetchSpdrEtfTopHoldings, fetchQqqTopHoldings } from './fetch/etf/holdings.ts';
 import { providerKeysFromEnv, providerKeyValues, type ProviderKeys } from './fetch/providerKeys.ts';
@@ -42,7 +42,7 @@ import { DirLongHistoryStore, longHistoryFromEnv, withLongHistory } from './stor
 import { fetchYahooChartLongRange, fetchYahooChartLongRangeBars, fetchYahooLongRangeWithBars } from './fetch/yahoo.ts';
 import type { WinnersRank } from './analysis/jamesPhase2Pages.ts';
 import { gatherFundamentalsV7, fetchPeerMetricsFor } from './fetch/fundamentals/v7.ts';
-import { fetchEarningsCalendar, type FundamentalsDeps } from './fetch/fundamentals/providers.ts';
+import { fetchEarningsCalendar, isKnownFmp402, type FundamentalsDeps } from './fetch/fundamentals/providers.ts';
 import { earningsSinceFromSavedCopy, type FundamentalsFallbackPolicy } from './fetch/fundamentals/resolve.ts';
 import { getCachedMacroRegime, type MacroDeps, type MacroRegimeMemo, type MacroRegimeRead } from './fetch/macro/refresh.ts';
 import { fetchGeminiReview, geminiKeyFromEnv } from './fetch/ai/geminiReview.ts';
@@ -168,7 +168,13 @@ export interface BrokerResolverDeps {
   readonly fetchChart: (t: string) => Promise<any>;
   /** Legacy-exact fetches (no dei shares fallback). */
   readonly legacyParity?: boolean;
+  /** Waits between SEC full-text search retries (tests: none). */
+  readonly sleep?: (ms: number) => Promise<void>;
 }
+
+/** Fix 2026-11-05: SEC full-text search retries 5xx / network errors (2 retries); legacy parity keeps one try. */
+const secSearchOpts = (parity: boolean | undefined, sleep: ((ms: number) => Promise<void>) | undefined): KeywordSearchOptions =>
+  ({ retries: parity ? 0 : KEYWORD_SEARCH_RETRIES, ...(sleep ? { sleep } : {}) });
 
 export async function buildBrokerCourseReportResolved(
   d: BrokerResolverDeps, ticker: string, log: RunLog, chart: any, vixLevelIn: number | null, fund: any,
@@ -185,7 +191,7 @@ export async function buildBrokerCourseReportResolved(
   log('  ⏱ institutional 13F fetch: ' + ((now() - t13) / 1000).toFixed(1) + 's');
   const so = soIn !== undefined ? soIn : await fetchSharesOutstandingHistory({ http: d.http }, cik, { deiFallback: !d.legacyParity });
   const hits = hitsIn !== undefined ? hitsIn
-    : await fetchSecFilingKeywordHits({ http: d.http, clock: d.clock }, cik, formatDateInTz(new Date(now() - 365 * 86400000), 'UTC', 'yyyy-MM-dd'));
+    : await fetchSecFilingKeywordHits({ http: d.http, clock: d.clock }, cik, formatDateInTz(new Date(now() - 365 * 86400000), 'UTC', 'yyyy-MM-dd'), secSearchOpts(d.legacyParity, d.sleep));
   let vixLevel = vixLevelIn;
   if (vixLevel == null) {
     const tV = now();
@@ -371,9 +377,11 @@ export function tickerDeps(s: Services, ss: ReportWorkbook, over: { readonly noA
     getTickerDarkPoolShare: (t, chart, log) => getTickerDarkPoolShare(s.darkPoolDeps, t, chart, log),
     getCachedMacroRegime: () => s.getMacro() as never,
     readBrokerDataCache: (t) => readBrokerDataCache(tabStore, t, clock.now()),
+    // Fix 2026-11-05: a remembered FMP ratios-ttm 402 (free plan) behind a missing interest coverage -> DEBUG in the log.
+    ...(s.macroDeps.fmp402Memory ? { interestCoverageNotInPlan: (t: string) => isKnownFmp402(kv, 'ratios-ttm', t, clock.now()).catch(() => false) } : {}),
     fetchSecEdgarCIK: (t) => fetchSecEdgarCIK({ http, kv, clock }, t),
     fetchSharesOutstandingHistory: (cik) => fetchSharesOutstandingHistory({ http }, cik, { deiFallback: !parity }),
-    fetchSecFilingKeywordHits: (cik, since) => fetchSecFilingKeywordHits({ http, clock }, cik, since),
+    fetchSecFilingKeywordHits: (cik, since) => fetchSecFilingKeywordHits({ http, clock }, cik, since, secSearchOpts(parity, ctx.sleep)),
     getCachedRelativeStrengthRanking: (t) => s.readRsRanking(t),
     fetchGeminiReview: async (a, log) => (noAi ? null : fetchGeminiReview({ http, apiKey: s.geminiKey, getMacroRegime: () => s.getMacro() as never, formatExpiry: nyExpiry, plainLabels: !parity, log, ...(parity ? {} : { marketOptionsLine: () => latestMarketOptionsLine(s) }) }, a as never)),
     aiUnavailable: noAi || !s.geminiKey,
@@ -383,7 +391,7 @@ export function tickerDeps(s: Services, ss: ReportWorkbook, over: { readonly noA
       }, a as never, geminiText)),
     } : {}),
     buildBrokerCourseReport: (ticker, log, chart, vix, fund, cik, so, hits) =>
-      buildBrokerCourseReportResolved({ http, kv, tabStore, fmpKey: keys.fmp, clock, fundamentals: fundDeps, fetchChart: (t) => s.fetchChart(t), legacyParity: parity }, ticker, log, chart, vix, fund, cik, so, hits),
+      buildBrokerCourseReportResolved({ http, kv, tabStore, fmpKey: keys.fmp, clock, fundamentals: fundDeps, fetchChart: (t) => s.fetchChart(t), legacyParity: parity, sleep: ctx.sleep }, ticker, log, chart, vix, fund, cik, so, hits),
     render: {
       dashboard: async (a) => buildDashboard(a.ss, a.ticker, a.chart, a.ind, a.gann, a.confluence, a.fundResult, a.techPlan, a.decision, a.fund, a.optAnalysis, a.fundSource,
         a.aiReview, a.status, a.ladderStock, a.ladderOptions, a.leapsCall, a.shortTermCall, a.institutional13F, a.shortInterestData, {

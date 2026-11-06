@@ -131,6 +131,39 @@ test('pipeline + Exit sheet: an assumed-date holding below its stop reads EXIT (
   assert.ok(count >= 3, 'the stop row, the entry-date row, the confidence and the data-health line name the assumed basis (found ' + count + ')');
   assert.ok(!text.includes('no purchase date is on file, so this is a low-confidence read'));
   assert.ok(!text.includes('generic lookback because there is no entry date on file'));
+  assert.ok(!text.includes('actual entry'), 'the Exit sheet never claims an actual entry for an assumed date');
+});
+
+test('5 Nov log: the stop-breach reason of an assumed-date read names the assumed basis, not "your actual entry"', async () => {
+  const holdings = parsePortfolio([['Ticker', 'type', 'amount', 'cost avg per stock'], ['MSTR', 'stock', 10, '$150.00']]).stocks;
+  const lines: Array<{ message: string; data?: Record<string, unknown> }> = [];
+  const log = new Logger({ sink: (l) => { lines.push(l); }, scope: 'exit', now: () => new Date(0) });
+  const ctx = createContext({ mode: 'test', runId: 'r36b', logger: log, clock: { now: () => NOW }, sleep: async () => {}, random: () => 0 });
+  const deps: ExitPipelineDeps = {
+    portfolio: pf(holdings), getChart: async (_c, t) => fallingChart(t),
+    analyzers: {
+      stockSinceEntry: (t, c, d, ch, o) => ({ ...computePositionExitRead(t, c, d, ch, o), thesisInvalidated: false }),
+      stockFixedLookback: (t, c, ch, o) => ({ ...computePositionExitReadFixedLookback(t, c, ch, undefined, o), thesisInvalidated: false }),
+    },
+  };
+  const run = await runExitPipeline(ctx, deps);
+  const reason = String(run.holdings[0]!.read?.['reason']);
+  assert.ok(reason.includes('based on the highest high ' + PHRASE + ', not a real purchase date.'), reason);
+  assert.ok(!reason.includes('actual entry'), reason);
+  const done = lines.find((l) => l.message === 'exit read done');
+  assert.equal(done?.data?.['basis'], 'since-assumed-entry');
+  assert.ok(String(done?.data?.['reason']).includes(PHRASE));
+  // The weekly-stops path (owner profile flag ON) carries the same read: same basis wording.
+  const weekly = await runExitPipeline(mkCtx(), deps, { weeklyStops: true });
+  const wReason = String(weekly.holdings[0]!.read?.['reason']);
+  assert.ok(weekly.holdings[0]!.weeklyStops, 'the weekly path ran');
+  assert.ok(wReason.includes(PHRASE) && !wReason.includes('actual entry'), wReason);
+  // A real purchase date keeps the old wording; the generic read keeps its own "NOT since your actual entry".
+  const ch = fallingChart('MSTR');
+  const real = computePositionExitRead('MSTR', 150, ch.dates[0]!.toISOString(), ch);
+  assert.ok((real as { reason: string }).reason.includes('since your actual entry, not a generic lookback.'), (real as { reason?: string }).reason);
+  const gen = computePositionExitReadFixedLookback('MSTR', 150, ch);
+  assert.ok((gen as { reason: string }).reason.includes('NOT since your actual entry'));
 });
 
 test('AI exit facts: the trailing stop uses the assumed date and carries the plain basis', () => {

@@ -60,7 +60,7 @@ import type { SnapshotRead } from '../reports/options/run.ts';
 import { computeTechnicalPlan, type TechnicalPlan } from './techPlan/plan.ts';
 import { synthesizeDecision, type Decision } from './decision.ts';
 import { playerMappingReadV1 } from './models/brokerCourse/playerMapping.ts';
-import { zombieCompanyScreenV1, sharesOutstandingTrendReadV1, filingKeywordReadV1 } from './models/brokerCourse/screens.ts';
+import { zombieCompanyScreenV1, sharesOutstandingTrendReadV1, filingKeywordReadV1, filingKeywordRead, type CheckedFilingKeywordRead } from './models/brokerCourse/screens.ts';
 import type { SharesOutstandingPoint } from '../fetch/sec/edgar.ts';
 import { formatBrokerCourseReportV1, type BrokerCourseReport } from './models/brokerCourse/report.ts';
 import { buildComparisonReportV1, formatComparisonReportV1, type ComparisonReport } from './models/brokerCourse/comparison.ts';
@@ -241,6 +241,17 @@ export interface TickerAnalysisDeps {
   readonly getCachedMacroRegime: () => Promise<{ readonly available: boolean; readonly regime?: string; readonly supplemental?: any; readonly dowTheory?: any; readonly evaluativeIndex?: any }>;
   /** readBrokerDataCacheV1_(ticker). */
   readonly readBrokerDataCache: (ticker: string) => Promise<{ readonly interestCoverageRatio: number | null } | null>;
+  /**
+   * Fix 2026-11-05 (log level only): true when the interest coverage is missing because FMP's ratios-ttm answered 402
+   * (not in the plan, remembered). The zombie screen's report status is unchanged; the technical log says DEBUG
+   * 'skipped' instead of a nightly WARNING. Optional; absent = false.
+   */
+  readonly interestCoverageNotInPlan?: (ticker: string) => Promise<boolean>;
+  /**
+   * Fix 2026-11-05 (log level only): the nightly's scratch workbooks share ONE _OPTIONS_SNAPSHOT (one ticker's), so a
+   * snapshot for another ticker is expected there: the report status is unchanged, the technical log says DEBUG 'skipped'.
+   */
+  readonly optionsSnapshotShared?: boolean;
   readonly fetchSecEdgarCIK: (ticker: string) => Promise<string | null>;
   readonly fetchSharesOutstandingHistory: (cik: string) => Promise<SharesOutstandingPoint[] | null>;
   readonly fetchSecFilingKeywordHits: (cik: string, sinceDate: string) => Promise<Record<string, number | null> | null>;
@@ -418,7 +429,7 @@ export async function runTickerAnalysisDetailed(
     let savedCopy: SavedCopyVerdict | null = null;
     const { fund, fundSource } = await resolveFundamentals(ticker, {
       gather, store: deps.fundamentalsStore, now: () => new Date(now()), dateLabel: deps.dateLabel, log,
-      setStatus: (k, st, d, rc) => S(k, st, d, rc),
+      setStatus: (k, st, d, rc, ls) => S(k, st, d, rc, ls),
       ...(parity ? {} : {
         fallback: deps.fundamentalsFallback ?? null,
         stampFetchedAt: !!deps.stampFundamentalsFetchedAt,
@@ -507,7 +518,10 @@ export async function runTickerAnalysisDetailed(
       const icr = cached ? cached.interestCoverageRatio : null;
       const zombie = zombieCompanyScreenV1(icr);
       if (zombie) { ind.zombieCompanyScreen = zombie; S('zombieCompanyScreen', 'ok', ''); }
-      else S('zombieCompanyScreen', 'degraded', 'Interest-coverage data not yet available (populated by the nightly automation)', 'NO_DATA_FOR_TICKER');
+      else {
+        const notInPlan = !parity && deps.interestCoverageNotInPlan ? await deps.interestCoverageNotInPlan(ticker) : false;
+        S('zombieCompanyScreen', 'degraded', 'Interest-coverage data not yet available (populated by the nightly automation)', 'NO_DATA_FOR_TICKER', notInPlan ? 'skipped' : undefined);
+      }
     } catch (e) { S('zombieCompanyScreen', 'failed', errMessage(e), 'SECTION_UNAVAILABLE'); }
 
     // 6.67. Dilution / filing-keyword screen. undefined = never attempted; null = attempted, nothing found.
@@ -531,9 +545,13 @@ export async function runTickerAnalysisDetailed(
         sharedFilingHits = await step('dilutionScreen', 'SEC filing-keyword search ' + ticker,
           () => deps.fetchSecFilingKeywordHits(dilutionCik as string, formatDateInTz(oneYearAgo, 'UTC', 'yyyy-MM-dd')));
         log('  ⏱ SEC filing-keyword search (up to 5 real calls): ' + fmt1(now() - tHits) + 's');
-        const kwRead = filingKeywordReadV1(sharedFilingHits);
+        // Fix 2026-11-05: a keyword SEC's search could not answer (after retries) is named, and the section is degraded,
+        // not ok (identical to filingKeywordReadV1 when every keyword answered; parity keeps legacy's read).
+        const kwRead: CheckedFilingKeywordRead | null = parity ? filingKeywordReadV1(sharedFilingHits) : filingKeywordRead(sharedFilingHits);
         if (kwRead) { ind.filingKeywordScreen = kwRead; gotOne = true; }
-        S('dilutionScreen', gotOne ? 'ok' : 'degraded', gotOne ? '' : 'real CIK found but no shares-outstanding history or filing-keyword data came back', gotOne ? undefined : 'NO_DATA_FOR_TICKER');
+        const unchecked = kwRead?.uncheckedKeywords ?? null;
+        if (unchecked) S('dilutionScreen', 'degraded', 'SEC full-text search could not check: ' + unchecked.join(', '), 'PROVIDER_NO_RESPONSE');
+        else S('dilutionScreen', gotOne ? 'ok' : 'degraded', gotOne ? '' : 'real CIK found but no shares-outstanding history or filing-keyword data came back', gotOne ? undefined : 'NO_DATA_FOR_TICKER');
       }
     } catch (e) { S('dilutionScreen', 'failed', errMessage(e), 'SECTION_UNAVAILABLE'); }
 
@@ -551,7 +569,7 @@ export async function runTickerAnalysisDetailed(
     const optSnap: any = readOptionsSnapshot(ss, ticker, now(), deps.timeZone);
     let optAnalysis = analyzeOptionsForScoring(optSnap, null, { plainLabels: !parity });
     if (!optSnap) S('options', 'degraded', 'No options snapshot — run Options Analysis on this ticker first', 'NO_DATA_FOR_TICKER');
-    else if (optSnap.mismatch) S('options', 'degraded', 'Snapshot is for ' + optSnap.ticker + ' — run Options Analysis on ' + ticker, 'NO_DATA_FOR_TICKER');
+    else if (optSnap.mismatch) S('options', 'degraded', 'Snapshot is for ' + optSnap.ticker + ' — run Options Analysis on ' + ticker, 'NO_DATA_FOR_TICKER', deps.optionsSnapshotShared ? 'skipped' : undefined);
     else S('options', (optSnap.ageDays != null && optSnap.ageDays > 4) ? 'degraded' : 'ok',
       (optSnap.ageDays != null && optSnap.ageDays > 4) ? ('Snapshot is ~' + Math.round(optSnap.ageDays) + 'd old') : '',
       (optSnap.ageDays != null && optSnap.ageDays > 4) ? 'SAVED_COPY_TOO_OLD' : undefined);

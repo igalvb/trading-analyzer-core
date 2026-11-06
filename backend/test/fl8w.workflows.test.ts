@@ -149,7 +149,7 @@ describe('FL-8w (b) no secret value or literal key in any workflow', () => {
     assert.ok(findSecretLikeText('KEY: sk-ant-abcdefgh').length > 0);
     assert.ok(findSecretLikeText('H: ' + 'a1b2c3d4'.repeat(4)).length > 0);
     assert.ok(findSecretLikeText('run: set -x').length > 0);
-    assert.deepEqual(findSecretLikeText('uses: actions/checkout@v4\nrun: npm ci\ntask-name: disk-usage'), []);
+    assert.deepEqual(findSecretLikeText('uses: actions/checkout@v5\nrun: npm ci\ntask-name: disk-usage'), []);
   });
   test('secrets are only passed as NAME: ${{ secrets.NAME }}, or in a per-user file NAME: ${{ secrets[format(\'{0}NAME\', env.SECRET_PREFIX)] }} (same name both sides)', () => {
     for (const w of WORKFLOWS) {
@@ -285,7 +285,7 @@ describe('FL-8w structure that protects the sheet and the bill', () => {
     });
     test(w.file + ': the run log is uploaded under always() and a failure notice exists', () => {
       const t = readWorkflow(w.file);
-      assert.match(stepWith(t, 'actions/upload-artifact@v4'), /if: always\(\)/);
+      assert.match(stepWith(t, 'actions/upload-artifact@v5'), /if: always\(\)/);
       assert.match(stepWith(t, 'Failure notice'), /if: failure\(\) \|\| cancelled\(\)/);
     });
   }
@@ -328,7 +328,7 @@ describe('FL-8w structure that protects the sheet and the bill', () => {
   });
   test('nightly leak check runs before the upload', () => {
     const t = readWorkflow('nightly.yml');
-    assert.ok(t.indexOf('Check the log for leaked keys') < t.indexOf('actions/upload-artifact@v4'));
+    assert.ok(t.indexOf('Check the log for leaked keys') < t.indexOf('actions/upload-artifact@v5'));
   });
 });
 
@@ -358,7 +358,7 @@ describe('FL-8w three spreadsheets (docs/SHEETS_CLEANUP_PLAN.md (d), (e))', () =
     assert.match(stepWith(t, 'migrate-data-tabs -- unpause'), /if: always\(\)/);
     assert.match(stepWith(t, 'npm run lock-sheets'), /if: always\(\)/);
     assert.ok(t.indexOf('-- unpause') > t.indexOf('npm run migrate-data-tabs -- "${args[@]}"'), 'the pause is cleared after the step');
-    assert.match(stepWith(t, 'actions/upload-artifact@v4'), /if: always\(\)/);
+    assert.match(stepWith(t, 'actions/upload-artifact@v5'), /if: always\(\)/);
     assert.match(stepWith(t, 'Failure notice'), /if: failure\(\) \|\| cancelled\(\)/);
     assert.ok(stepWith(t, 'Run the migration step').includes('GITHUB_TOKEN: ${{ github.token }}'), 'the pre-check sees running writer runs');
   });
@@ -560,9 +560,9 @@ describe('Owner 2026-11-04: the daily run watchdog (src/watchdog.ts)', () => {
     const run = stepWith(t, 'npm run watchdog');
     assert.ok(run.includes('GITHUB_TOKEN: ${{ github.token }}') && run.includes('GITHUB_REPOSITORY: ${{ github.repository }}'));
     assert.ok(!stepWith(t, 'Check the log for leaked keys').includes('GITHUB_TOKEN'));
-    assert.ok(t.indexOf('Check the log for leaked keys') < t.indexOf('actions/upload-artifact@v4'), 'leak check before the upload');
+    assert.ok(t.indexOf('Check the log for leaked keys') < t.indexOf('actions/upload-artifact@v5'), 'leak check before the upload');
     assert.match(stepWith(t, 'Check the log for leaked keys'), /for name in .*TELEGRAM_BOT_TOKEN/);
-    assert.match(stepWith(t, 'actions/upload-artifact@v4'), /if: always\(\)/);
+    assert.match(stepWith(t, 'actions/upload-artifact@v5'), /if: always\(\)/);
     assert.doesNotMatch(t, /npm run lock-sheets|npm test|npm run typecheck/, 'nothing else runs');
   });
   test('verify.yml (layer 2, owner 2026-11-04): manual only, days 3 then user, actions: read, group verify, 10 min, the Anthropic key on the run step, leak check before the upload', () => {
@@ -578,7 +578,7 @@ describe('Owner 2026-11-04: the daily run watchdog (src/watchdog.ts)', () => {
     const leak = stepWith(t, 'Check the log for leaked keys');
     assert.ok(!leak.includes('GITHUB_TOKEN'));
     assert.match(leak, /for name in TELEGRAM_BOT_TOKEN ANTHROPIC_API_KEY;/);
-    assert.ok(t.indexOf('Check the log for leaked keys') < t.indexOf('actions/upload-artifact@v4'), 'leak check before the upload');
+    assert.ok(t.indexOf('Check the log for leaked keys') < t.indexOf('actions/upload-artifact@v5'), 'leak check before the upload');
     assert.doesNotMatch(t, /npm run (watchdog|lock-sheets|nightly)|npm test|git push|contents: write/, 'read-only, nothing else runs');
   });
   test('package.json: ops-verify, not clashing with the older verify (verifyCli.ts)', () => {

@@ -38,7 +38,7 @@
  */
 
 /** Bumped on every change, so the live version can be checked (a GET on the relay answers with it). */
-export const RELAY_VERSION = '2026-11-05.1';
+export const RELAY_VERSION = '2026-11-05.2';
 /** The owner's user id (the workflows' default `user`). */
 export const OWNER_USER = 'owner';
 /** A user id that is also a GitHub secret prefix (same rule as backend/src/profile/runUser.ts). */
@@ -214,9 +214,9 @@ export default {
       // One start per user, in order (the owner first); one user's refusal never stops the next user's start.
       for (const who of usersOf(env).filter((u) => u.timers)) {
         const err = await dispatch(env, job.workflow, inputsFor(who.user, job.inputs));
-        // 2026-11-01: say it either way, so a timer that never fires (no message at all) can be told apart from one that does.
+        // 2026-11-05 (owner: Telegram clean): a started run is silent (its PDFs come later; the watchdog and the GitHub
+        // backup timer report a run that never happened). Only a refusal is sent.
         if (err) await reply(env, who.chat, '⚠️ The ' + job.name + ' run could not be started. ' + err);
-        else await reply(env, who.chat, '⏰ ' + timerLine(job.name, at));
       }
     })().catch((e) => reply(env, env.ALLOWED_CHAT_ID, crashLine(event, e)).catch(() => {})));
   },

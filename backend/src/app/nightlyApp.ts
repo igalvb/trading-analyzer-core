@@ -8,7 +8,7 @@
  *                     relativeStrength writes the F-57 tab ('💾 RS Ranking').
  *   macro.refresh     refreshMacroRegimeCache + refreshMacroSnapshot (each logs its own failures).
  *   analysis.tickers  portfolio holdings then watchlist; per ticker the broker-course data cache is
- *                     refreshed first (F-N6), then ONE full analysis, memoised for the run (F3) and
+ *                     refreshed first (F-N6; inside the run-wide cache, so the paper list's tickers too), then ONE full analysis, memoised for the run (F3) and
  *                     projected for Buy and Exit. Each ticker renders into its own scratch workbook
  *                     (F-N9): concurrent tickers must not interleave writes on the shared dashboard /
  *                     model / Log tabs; the nightly's report tabs are the Buy and Exit reports.
@@ -39,7 +39,7 @@ import { createAnalysisCache, type AnalysisCache } from './analysisCache.ts';
 import { runPaperNight } from '../paper/paperJob.ts';
 import { runLiveDryRun } from '../live/liveJob.ts';
 import { liveConfigFromEnv } from '../live/liveConfig.ts';
-import { fetchYahooChartLongRangeBars } from '../fetch/yahoo.ts';
+import { fetchYahooChartLongRangeBars, fetchYahooChartRaw } from '../fetch/yahoo.ts';
 import { findChrome, htmlToPdf } from '../reports/pdf/chromePdf.ts';
 import { toPortfolioSummary } from './portfolio.ts';
 import { ReportWorkbook, MemoryWorkbookBackend } from '../sheets/reportSheet.ts';
@@ -50,7 +50,7 @@ import { SheetTabFormatter } from '../sheets/formatOps.ts';
 import { cacheSet } from '../storage/kv.ts';
 import { writeRsRankingTab } from '../storage/rsRankingTab.ts';
 import {
-  buildDarkPoolTrackerReport, computeEvaluativeIndex, computeRelativeStrengthRanking, darkPoolUniverse,
+  buildDarkPoolTrackerReport, computeEvaluativeIndex, computeRelativeStrengthRanking, darkPoolUniverse, relativeStrengthMissKind,
   EVALUATIVE_INDEX_KEY, RELATIVE_STRENGTH_KEY, DARK_POOL_CACHE_TTL_HOURS, type RelativeStrengthRanking,
 } from '../analysis/darkPool.ts';
 import { writeDarkPoolTrackerSheet } from '../sheets/writers/darkPoolTracker.ts';
@@ -160,10 +160,19 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
   const cboeMemo: CboeRawMemo = new Map();
   const cboeStats: CboeFetchStats = new Map();
   let night: OptionsNight | null = null;
-  const cache = createAnalysisCache(async (t) => runTickerAnalysisDetailed({
-    ...tickerDeps(s, await scratch(await optionsSeedFor(night, t)), { noAi: true }),
-    ...(OPTIONS_READ_APPLIED ? {} : { optionsShadow: (x: string) => shadowInputOf(night, x) }),
-  }, t));
+  const cache = createAnalysisCache(async (t) => {
+    // F-N6, fix 2026-11-05: the broker-course data cache (short interest, interest coverage) is refreshed before EVERY
+    // analysis of the run -- the portfolio and watchlist tickers AND the ones only paper.trade analyses (the paper list),
+    // which used to read an empty cache every night. A fresh row is left alone; FMP's 24 h response cache and the
+    // remembered 402 keep it to at most one FMP call per ticker per day.
+    await refreshBrokerCourseDataCache(s.macroDeps, t, log);
+    return runTickerAnalysisDetailed({
+      ...tickerDeps(s, await scratch(await optionsSeedFor(night, t)), { noAi: true }),
+      // The scratch workbooks share one _OPTIONS_SNAPSHOT (one ticker's): another ticker's snapshot is expected here.
+      optionsSnapshotShared: true,
+      ...(OPTIONS_READ_APPLIED ? {} : { optionsShadow: (x: string) => shadowInputOf(night, x) }),
+    }, t);
+  });
   const attempts = new Map<string, number>();
   // Three spreadsheets: the formatter writes on the sheet that holds each tab (the Dark Pool Tracker -> reports).
   const formatter = s.tabFormatter ?? (s.sheets ? new SheetTabFormatter(ctx, s.sheets) : undefined);
@@ -187,16 +196,22 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
     'darkPool.relativeStrength': async (): Promise<JobOutcome> => {
       const tickers = darkPoolUniverse();
       const map: Record<string, RelativeStrengthRanking> = {};
+      const shortHistory: string[] = [];
+      const missing: string[] = [];
+      // 5 Nov: a miss is re-read raw (the cached fetch hides a short chart as null): a new listing is an expected skip.
+      const raw = { fetchChart: (t: string) => fetchYahooChartRaw(s.http, t, '2y') };
       for (const t of tickers) {
         const r = await computeRelativeStrengthRanking(dp, t);
         if (r) map[t] = r;
+        else if ((await relativeStrengthMissKind(raw, t)) === 'SHORT_HISTORY') shortHistory.push(t);
+        else missing.push(t);
       }
       const n = Object.keys(map).length;
       if (n === 0) throw new Error('relative strength: no ticker could be ranked');
       if (s.settings.rsRankingTab) await writeRsRankingTab(s.tabStore, map, new Date(s.clock.now()));
       else await cacheSet(s.kv, RELATIVE_STRENGTH_KEY, map, DARK_POOL_CACHE_TTL_HOURS, s.clock.now());
       log('relative strength ranked ' + n + '/' + tickers.length);
-      return n < tickers.length ? { state: 'degraded', reason: 'The relative-strength ranking was refreshed for ' + n + ' of ' + tickers.length + ' stocks; the rest had too little price history.' } : { state: 'ok' };
+      return relativeStrengthOutcome(n, tickers.length, shortHistory, missing);
     },
     'macro.refresh': async () => {
       const once = { ...s.macroDeps, gdpOnce: {} }; // Sheets cleanup 4b: GDPC1 fetched once for both
@@ -216,7 +231,7 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
     },
     'options.reads': async () => {
       if (!night) { log('options reads: no option chains were read in this run; nothing stored'); return { state: 'ok' }; }
-      log(await recordOptionsNight({ store: s.tabStore, kv: s.kv, now: () => s.clock.now(), log }, night,
+      log(await recordOptionsNight({ store: s.tabStore, kv: s.kv, now: () => s.clock.now(), log, timeZone: s.timeZone }, night,
         async (t) => (attempts.has(t) ? ((await cache.get(t)).optionsShadow ?? null) : null)));
       return { state: 'ok' };
     },
@@ -327,8 +342,7 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
       const n = (attempts.get(t) ?? 0) + 1;
       attempts.set(t, n);
       if (n > 1) cache.forget(t); // F-N8: a retry after a timeout runs again instead of waiting on the hung attempt
-      await refreshBrokerCourseDataCache(s.macroDeps, t, log); // F-N6
-      return cache.daily(t);
+      return cache.daily(t); // F-N6: the cache runner refreshes the broker-course data cache first
     },
     afterAnalysis,
     optionsReport: () => optionsRunReport(night),
@@ -348,6 +362,19 @@ export async function settledWithin<T>(p: Promise<T>, ms: number): Promise<T | n
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<null>((res) => { timer = setTimeout(() => res(null), ms); });
   try { return await Promise.race([p.catch(() => null), late]); } finally { clearTimeout(timer); }
+}
+
+/**
+ * 5 Nov: the relative-strength step's outcome. A ticker with too little price history (a new listing) is an expected
+ * gap: the step stays ok and the run-summary line names it. Only a real miss (no usable chart) makes it degraded.
+ */
+export function relativeStrengthOutcome(ranked: number, total: number, shortHistory: readonly string[], missing: readonly string[]): JobOutcome {
+  const skipped = shortHistory.length ? shortHistory.length + ' skipped, too little history: ' + shortHistory.join(', ') : '';
+  if (missing.length) {
+    return { state: 'degraded', reason: 'The relative-strength ranking was refreshed for ' + ranked + ' of ' + total + ' stocks; '
+      + missing.length + ' had no usable price data: ' + missing.join(', ') + (skipped ? '; ' + skipped : '') + '.' };
+  }
+  return skipped ? { state: 'ok', reason: 'Ranked ' + ranked + ' of ' + total + ' stocks; ' + skipped + '.' } : { state: 'ok' };
 }
 
 /** Current market value of the row / (100 x contracts); null when either is missing or not positive. */

@@ -34,6 +34,7 @@ import type { ReasonCode } from '../../reports/messages/catalog.ts';
 import { getCachedFundamentals, saveFundamentalsCache, type CachedFundamentals, type OnStoreError, type PropertyStore } from '../../storage/kv.ts';
 import type { FundamentalsSeriesStore } from '../../storage/fundamentalsSeriesTab.ts';
 import type { GatherResult, MergedFundamentals } from '../../types/fundamentals.ts';
+import { isEtfOrFund } from '../etf/kind.ts';
 
 export interface FundamentalsFallbackPolicy {
   /** The setting (FUND_FALLBACK_MAX_AGE_DAYS); the user's value is 30. */
@@ -59,7 +60,8 @@ export interface ResolveFundamentalsDeps {
   readonly dateLabel?: (d: Date) => string;
   readonly log?: (msg: string) => void;
   /** setStatusV7(status, key, state, detail). */
-  readonly setStatus?: (key: string, state: StepStateValue, detail: string, reasonCode?: ReasonCode) => void;
+  /** `logState`: what the technical log calls it when that differs from `state` (runTicker's S; fix 2026-11-05). */
+  readonly setStatus?: (key: string, state: StepStateValue, detail: string, reasonCode?: ReasonCode, logState?: string) => void;
   readonly onStoreError?: OnStoreError;
   readonly stampFetchedAt?: boolean;
   readonly onSavedCopy?: (verdict: SavedCopyVerdict) => void;
@@ -117,6 +119,8 @@ export async function judgeSavedCopy(
 export async function resolveFundamentals(ticker: string, deps: ResolveFundamentalsDeps): Promise<ResolvedFundamentals> {
   const log = deps.log ?? ((): void => {});
   const setStatus = deps.setStatus ?? ((): void => {});
+  // Fix 2026-11-05: an ETF / fund has no peers by nature -- the report's 'degraded' stays, the technical log says DEBUG 'skipped'.
+  const noPeersLogState = isEtfOrFund(ticker) ? 'skipped' : undefined;
   const nowDate = (): Date => (deps.now ? deps.now() : new Date());
   let fund: MergedFundamentals | null = null;
   let fundSource = 'none';
@@ -140,7 +144,8 @@ export async function resolveFundamentals(ticker: string, deps: ResolveFundament
     setStatus('series', fund._metricSeries ? 'ok' : 'degraded',
       fund._metricSeries ? '' : 'Finnhub series unavailable — OWN score uses flat levels only (no growth/margin trend, no peer valuation)', fund._metricSeries ? undefined : 'NO_DATA_FOR_TICKER');
     setStatus('peers', (fund._peersRaw && fund._peersRaw.length) ? 'ok' : 'degraded',
-      (fund._peersRaw && fund._peersRaw.length) ? fund._peersRaw.length + ' peers' : 'No peers — valuation scored on absolute bands, not vs peers', (fund._peersRaw && fund._peersRaw.length) ? undefined : 'NO_DATA_FOR_TICKER');
+      (fund._peersRaw && fund._peersRaw.length) ? fund._peersRaw.length + ' peers' : 'No peers — valuation scored on absolute bands, not vs peers', (fund._peersRaw && fund._peersRaw.length) ? undefined : 'NO_DATA_FOR_TICKER',
+      (fund._peersRaw && fund._peersRaw.length) ? undefined : noPeersLogState);
     log('✅ Fundamentals: ' + (fund._sources.length ? fund._sources.join('+') : 'profile-only') +
       (fund._metricSeries ? ' + series' : '') + (fund._peersRaw ? ' + ' + fund._peersRaw.length + ' peers' : ''));
   } else {
@@ -172,7 +177,8 @@ export async function resolveFundamentals(ticker: string, deps: ResolveFundament
         // F-36 option B: the saved copy carries its series and peers, so the score sees them as on a live run.
         const f = cached.data;
         setStatus('series', f._metricSeries ? 'ok' : 'degraded', f._metricSeries ? 'from the saved copy' : 'Finnhub series unavailable — OWN score uses flat levels only (no growth/margin trend, no peer valuation)', f._metricSeries ? undefined : 'NO_DATA_FOR_TICKER');
-        setStatus('peers', (f._peersRaw && f._peersRaw.length) ? 'ok' : 'degraded', (f._peersRaw && f._peersRaw.length) ? f._peersRaw.length + ' peers (saved copy)' : 'No peers — valuation scored on absolute bands, not vs peers', (f._peersRaw && f._peersRaw.length) ? undefined : 'NO_DATA_FOR_TICKER');
+        setStatus('peers', (f._peersRaw && f._peersRaw.length) ? 'ok' : 'degraded', (f._peersRaw && f._peersRaw.length) ? f._peersRaw.length + ' peers (saved copy)' : 'No peers — valuation scored on absolute bands, not vs peers', (f._peersRaw && f._peersRaw.length) ? undefined : 'NO_DATA_FOR_TICKER',
+          (f._peersRaw && f._peersRaw.length) ? undefined : noPeersLogState);
         log('⚠️ Using cached fundamentals (' + cached.date + ') with their saved series and peers');
       } else {
         setStatus('series', 'degraded', 'Series unavailable on a cache hit — OWN score uses flat levels only', 'NOT_RUN');

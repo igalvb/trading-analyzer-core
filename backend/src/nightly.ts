@@ -7,9 +7,9 @@
  *
  *   flags: --memory (no spreadsheet: a dry run on empty caches), --debug
  *   env:   NIGHTLY_TICKER_TIMEOUT_MS (default 10 minutes), NIGHTLY_DIGEST=off (no Telegram digest), plus compose.ts's settings
- * Row 29: after the run, the Telegram digest (one table + the Buy and Exit PDFs; reports/digest/nightlyDigest.ts),
- * only against the real Sheet and when TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are set. Row 38: inside GitHub Actions the
- * table ends with the month's GitHub minutes (reports/digest/actionsMinutes.ts; GITHUB_TOKEN with `actions: read`). A digest failure is logged;
+ * Row 29: after the run, the Telegram digest (the Buy and Exit PDFs only, the bottom line as the caption, tonight's
+ * summary on the first PDF's cover; reports/digest/nightlyDigest.ts, notify/policy.ts), only against the real Sheet
+ * and when TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are set. Row 38: inside GitHub Actions the summary ends with the month's GitHub minutes (reports/digest/actionsMinutes.ts; GITHUB_TOKEN with `actions: read`). A digest failure is logged;
  * it never changes the run's exit status.
  *
  * Exit status: 0 when the run finished (even partly), 1 when every step failed or the run crashed.
@@ -106,7 +106,7 @@ export async function runNightlyDigest(d: NightlyDigestDeps): Promise<DigestSent
     const data = digestOf({ day, regime, capture: d.app.digest, paper, summary: d.summary });
     const minutes = d.minutesLine ? await d.minutesLine().catch((e: unknown) => { warn('nightly digest: GitHub minutes line not read: ' + String(e)); return MINUTES_UNREADABLE; }) : null;
     const sent = await sendNightlyDigest({ telegram: d.telegram, toPdf: d.toPdf, log: d.log, timeZone: d.timeZone, now: d.now, ...(d.outDir ? { outDir: d.outDir } : {}), ...(minutes ? { footer: [minutes] } : {}) }, data, d.app.digest);
-    d.log('nightly digest: message ' + (sent.message ? 'sent' : 'NOT sent') + ', ' + sent.pdfs.length + ' PDF(s) sent');
+    d.log('nightly digest: ' + sent.pdfs.length + ' PDF(s) sent' + (sent.message ? '; no PDF, one plain line sent instead' : ''));
     return sent;
   } catch (e) {
     warn('nightly digest failed (the nightly result is unchanged): ' + String(e));

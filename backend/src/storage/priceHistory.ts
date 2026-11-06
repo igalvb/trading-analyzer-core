@@ -339,6 +339,8 @@ export interface PriceSheetsApi {
   formatBatch(ctx: RunContext, requests: readonly sheets_v4.Schema$Request[]): Promise<StepResult<number>>;
   /** C3: adds tabs in ONE call and returns their new sheetIds (title -> id) from the reply. Optional (test fakes leave it out). */
   addTabs?(ctx: RunContext, titles: readonly string[]): Promise<StepResult<Record<string, number>>>;
+  /** Every tab's grid size (rows, columns). Optional: used only to grow a tab before a write past its grid. */
+  tabGrids?(ctx: RunContext): Promise<StepResult<ReadonlyArray<{ readonly sheetId: number; readonly title: string; readonly rowCount: number; readonly columnCount: number }>>>;
 }
 
 const HEADER_BACKGROUND = { red: 0xec / 255, green: 0xef / 255, blue: 0xf1 / 255 };

@@ -48,7 +48,7 @@ describe('FL-13d — Telegram commands', () => {
     assert.ok(sheetHasText(TAB, AI_PLACEHOLDER));
   });
 
-  test('/exit: --ai-status says missing while the placeholder is there; the send makes a PDF and sends message + PDF', async () => {
+  test('/exit: --ai-status says missing while the placeholder is there; the send makes a PDF and sends the PDF only, the bottom line as its caption', async () => {
     const out: string[] = [];
     await sendExitMain(['--ai-status'], { out: (s) => out.push(s), err: () => {}, env: {} }, { readTab: async () => TAB });
     assert.deepEqual(out, ['missing\n']);
@@ -59,7 +59,8 @@ describe('FL-13d — Telegram commands', () => {
       { readTab: async () => TAB, toPdf: async (h, p) => { html = h; fs.writeFileSync(p, '%PDF'); }, fetchImpl, now: () => Date.UTC(2026, 9, 27) });
     assert.equal(code, 0);
     assert.match(html, /Report from Oct 27, 2026, 1:57 PM EDT/);
-    assert.deepEqual(calls.map((c) => c.method), ['sendMessage', 'sendDocument']);
+    assert.deepEqual(calls.map((c) => c.method), ['sendDocument'], 'the PDF only (clean policy)');
+    assert.equal(calls[0]!.body.get('caption'), 'Exit Report (from Oct 27, 2026, 1:57 PM EDT)');
   });
 
   test('setup points the bot at the relay with the secret and sets the 3-command menu', async () => {
@@ -172,9 +173,8 @@ describe('FL-13d — Telegram commands', () => {
       const env = { BOT_TOKEN: '1:a', ALLOWED_CHAT_ID: '42', WEBHOOK_SECRET: 's3cret', GITHUB_TOKEN: 'gh', REPO: 'someone/their-copy', TICKERS: RELAY_TICKERS };
       const run = async () => { const waits: Promise<unknown>[] = []; await relay.scheduled({ cron: '23 3 * * *', scheduledTime: Date.parse('2026-10-30T03:23:00Z') }, env, { waitUntil: (p: Promise<unknown>) => waits.push(p) }); await Promise.all(waits); };
       await run();
-      assert.equal(seen.length, 2);
+      assert.equal(seen.length, 1, 'owner 2026-11-05: a started run is silent');
       assert.ok(seen[0]!.url.endsWith('/actions/workflows/nightly.yml/dispatches') && seen[0]!.body.ref === 'main');
-      assert.match(String(seen[1]!.body.text), /⏰ The nightly run was started by the relay timer \(03:23 UTC\)/);
       seen.length = 0; status = 401;
       await run();
       assert.ok(String(seen[1]!.body.text).includes('nightly run could not be started'));

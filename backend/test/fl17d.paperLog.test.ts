@@ -42,7 +42,7 @@ describe('FL-17d — paper log', () => {
     assert.equal(await appendNight(store, READS_TAB, ['Day'], '2026-10-29', [['2026-10-29', 'X']]), 0, 'a retried night is not written twice');
   });
 
-  test('every night: a short message and the report file (standings + every account\'s holdings); an old test is restarted and its tabs cleared', async () => {
+  test('every night: the report PDF only, its bottom line as the caption (standings + every account\'s holdings inside); an old test is restarted and its tabs cleared', async () => {
     const store = new MemoryTabStore();
     const old = newPaperState(['TSLA']);
     (old as { start: string }).start = '2026-10-28';
@@ -59,19 +59,22 @@ describe('FL-17d — paper log', () => {
     const analysis = async (t: string) => ({ ticker: t, result: undefined, status: {}, dataQuality: [], reports: t === 'NVDA' ? { comparison: cmp } : {}, texts: {} }) as never;
     const sent: Array<{ method: string; body: unknown }> = [];
     const fetchImpl = (async (url: string, init: { body: unknown }) => { sent.push({ method: String(url).split('/').pop() as string, body: init.body }); return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } })); }) as unknown as typeof fetch;
+    let html = '';
+    const fs = await import('node:fs');
     const deps = { store, timeZone: 'America/New_York', watchlist: [], log: () => {}, now: () => Date.parse(upTo + 'T23:00:00Z'), fetchChart: async (t: string) => chart(t), analysis,
-      telegram: { deps: { token: 't', fetchImpl }, chatId: '1' } };
+      telegram: { deps: { token: 't', fetchImpl }, chatId: '1' }, toPdf: async (h: string, p: string) => { html = h; fs.writeFileSync(p, '%PDF'); } };
     await runPaperNight(deps);
     assert.equal((await loadPaper(store))!.state.start, PAPER_START, 'restarted');
     assert.ok(!(await store.read(LOG_TAB, 2))!.some((r) => r[1] === 'old row'), 'the old log is cleared');
     assert.equal(sent.length, 0, 'the decide night has no values yet: nothing sent');
     upTo = '2026-10-29';
     await runPaperNight(deps);
-    assert.deepEqual(sent.map((x) => x.method), ['sendMessage', 'sendDocument']);
-    const msg = JSON.parse(String(sent[0]!.body)).text as string;
-    assert.ok(msg.includes('Top 5:') && msg.includes('📊 Hold QQQ') && msg.includes('📊 Hold your 14'), msg);
-    const file = sent[1]!.body as FormData;
-    const html = await (file.get('document') as Blob).text();
+    assert.deepEqual(sent.map((x) => x.method), ['sendDocument'], 'the PDF only, no text message');
+    const file = sent[0]!.body as FormData;
+    assert.equal((file.get('document') as File).name, 'paper-test-2026-10-29.pdf');
+    const caption = String(file.get('caption'));
+    assert.match(caption, /^Paper test 2026-10-29: best .+ [+-]\d+\.\d% · QQQ [+-]\d+\.\d%/);
+    assert.ok(caption.length <= 200 && !caption.includes('\n'), caption);
     for (const want of ['Standings', 'What each account holds', 'Everything together', 'Turtle (list', 'Hold your 14 equally', 'Cash']) assert.ok(html.includes(want), want);
     assert.ok((await store.read(PAPER_TAB, 1))!.length > 3);
   });

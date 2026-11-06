@@ -166,10 +166,9 @@ describe('P6 relay: more users (USERS)', () => {
       await timer(env, '2026-10-30T03:23:00Z', '23 3 * * *');
       assert.equal(dispatches(seen).length, 2, 'u2 still started after the owner was refused');
       const notes = seen.filter((c) => c.url.endsWith('sendMessage'));
-      assert.equal(notes.length, 2, 'the owner gets the refusal, u2 gets the started line');
+      assert.equal(notes.length, 1, 'the owner gets the refusal; u2\'s started run is silent (owner 2026-11-05)');
       assert.equal(notes[0]!.body.chat_id, '42');
       assert.match(notes[0]!.body.text, /The nightly run could not be started/);
-      assert.match(notes[1]!.body.text, /⏰ The nightly run was started by the relay timer/);
     }, () => (n++ === 0 ? 401 : 204));
     await withFetch(async (seen) => {
       await timer(env, '2026-10-30T12:00:00Z', '0 12 * * *');

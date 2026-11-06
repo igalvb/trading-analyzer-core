@@ -9,7 +9,7 @@ import { fixturesPresent } from './fixtures.ts';
 import { fixtureBodies, clockAfterFixtures } from './fl7b2Fixtures.ts';
 import { HttpResponse, type HttpRequest, type HttpTransport } from '../src/net/http.ts';
 import { runTickerJob, type TickerJob } from '../src/ticker.ts';
-import { telegramSummary } from '../src/analyzeReport.ts';
+import { reportHtml } from '../src/analyzeReport.ts';
 import { ANALYSIS_TAB } from '../src/analysis/runTicker.ts';
 import { ANALYZE_OPUS_NO_KEY, opusVerdict } from '../src/ai/analyzeOpus.ts';
 import { CLAUDE_REVIEW_MODEL, type ClaudeRequest, type ClaudeSdk } from '../src/ai/claudeReview.ts';
@@ -77,7 +77,7 @@ describe('Analyze: Claude Opus second opinion', { skip: ready ? false : 'fixture
     assert.ok(text.indexOf('AI ANALYST REVIEW') < text.indexOf('AI SECOND OPINION  (Claude Opus)'), 'Opus right after Gemini');
     assert.match(text, /Opus fake view of TSLA/);
     assert.match(job.art!.opusReview!.summary, /Opus second opinion/);
-    assert.match(telegramSummary(job), /🧠 Opus second opinion/);
+    assert.match(reportHtml(job, 0), /Opus second opinion/, 'the one-line summary is on the PDF cover (the Telegram caption is the bottom line only)');
     // display only: every score and decision is the same as the run without Opus
     assert.deepEqual(job.art!.result!.decision, plain.art!.result!.decision);
     assert.deepEqual(job.art!.result!.fundResult.score, plain.art!.result!.fundResult.score);
@@ -92,7 +92,7 @@ describe('Analyze: Claude Opus second opinion', { skip: ready ? false : 'fixture
     assert.equal(sdk.calls.length, 0);
     assert.equal(job.art!.opusReview!.summary, ANALYZE_OPUS_NO_KEY);
     assert.ok(tabText(job).includes(ANALYZE_OPUS_NO_KEY));
-    assert.ok(telegramSummary(job).includes(ANALYZE_OPUS_NO_KEY));
+    assert.ok(reportHtml(job, 0).includes(ANALYZE_OPUS_NO_KEY));
   });
 
   test('Opus fails: one plain line, never fails the run, no technical text in the report', async () => {

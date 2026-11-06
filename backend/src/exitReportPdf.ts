@@ -3,7 +3,7 @@
  *
  * The nightly's Exit step alone (the same job as the `exit-report` menu command: every holding on the
  * Portfolio tab -> the Exit Report tab and Exit Target History, inside the Master Lock), then the
- * Exit Report tab as a PDF, with a short message, to Telegram. Nothing here computes a number: the
+ * Exit Report tab as a PDF to Telegram, the bottom line as its caption (notify/policy.ts). Nothing here computes a number: the
  * PDF shows the cells the Exit step wrote.
  * Exit: 0 done, 1 the step or the PDF/Telegram failed, 2 configuration.
  */
@@ -19,7 +19,9 @@ import { EXIT_SHEET_TAB } from './reports/exitSheet/text.ts';
 import type { ReportWorkbook } from './sheets/reportSheet.ts';
 import type { EntryOverrides } from './ticker.ts';
 import { tabHtml, reportDocument } from './reports/pdf/workbookHtml.ts';
-import { sendMessage } from './notify/telegram.ts';
+import { notifyIfNeeded, bottomLine } from './notify/policy.ts';
+import { exitActionCounts, exitCountsText } from './reports/digest/nightlyDigest.ts';
+import type { ExitReportInput } from './reports/exitSheet/types.ts';
 import { prepareDelivery, deliverPdf, dateStamp, type DeliverDeps } from './reports/pdf/deliver.ts';
 
 export interface ExitReportPdfDeps extends DeliverDeps {
@@ -44,10 +46,13 @@ export async function exitReportPdfMain(argv: readonly string[], io: CliIo = STD
   const s: Services = { ...base, openWorkbook: async (p) => { const w = await base.openWorkbook(p); opened.push(w); return w; } };
   let reason = '';
   let stepFailed = false;
+  let built: ExitReportInput | null = null;
   try {
     await withSheetWrites(s, async () => {
-      const job = (await buildNightlyApp(s)).deps.jobs['exit.report'];
+      const app = await buildNightlyApp(s);
+      const job = app.deps.jobs['exit.report'];
       const o = job ? await job() : undefined;
+      built = app.digest.exit?.input ?? null;
       if (!job) stepFailed = true;
       if (o && o.state === 'degraded' && o.reason) reason = o.reason;
       await s.flushStores();
@@ -62,7 +67,7 @@ export async function exitReportPdfMain(argv: readonly string[], io: CliIo = STD
   const section = sheet ? tabHtml(sheet, base.timeZone) : null;
   if (stepFailed || !section) {
     io.out('Exit report: the step did not finish (details in the log).\n');
-    if (d.send) await sendMessage(d.tg, d.chatId, '⚠️ Exit Report: the run did not finish. Details are in the GitHub run log.').catch((e: unknown) => { base.ctx.log.warning('Telegram: the did-not-finish notice could not be sent', { detail: String(e) }); });
+    if (d.send) await notifyIfNeeded({ deps: d.tg, chatId: d.chatId }, '⚠️ Exit Report: the run did not finish. Details are in the GitHub run log.', (m) => base.ctx.log.warning('Telegram: the did-not-finish notice could not be sent', { detail: m }));
     return 1;
   }
   const now = (deps.now ?? Date.now)();
@@ -70,10 +75,14 @@ export async function exitReportPdfMain(argv: readonly string[], io: CliIo = STD
   const html = reportDocument({ title: 'Exit Strategy Report', subtitle: when + ' (New York time)', facts: [], lines: reason ? [reason] : ['Every holding on the Portfolio tab, with its action, stop, targets, how many to sell and tax.'] }, [section], null);
   const sent = await deliverPdf(io, d, {
     label: 'Exit report', html, outDir, pdfName: `v13-report-exit-${dateStamp(now)}.pdf`,
-    message: ['📤 Exit Report updated', when + ' (New York)', ...(reason ? ['', reason] : []), '', 'Full report in the PDF below.'].join('\n'),
-    caption: 'Exit Strategy Report',
+    caption: exitCaption(built, when, reason),
   });
   return sent;
+}
+
+/** The bottom line: "Exit Report 5 Nov 2026, 21:10: 1 EXIT, 13 HOLD", and the step's partial reason on a second line. */
+export function exitCaption(input: ExitReportInput | null, when: string, reason = ''): string {
+  return bottomLine('Exit Report ' + when, [input ? exitCountsText(exitActionCounts(input)) : null], reason ? '⚠️ ' + reason : null);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

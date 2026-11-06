@@ -46,13 +46,15 @@ function fakeGitHub(runs: GhRun[], logs: Record<number, string> = {}, fail = fal
   };
 }
 
-function fakeTelegram(): { fetch: typeof fetch; sent: string[] } {
+function fakeTelegram(): { fetch: typeof fetch; sent: string[]; docs: Array<{ name: string; caption: string }> } {
   const sent: string[] = [];
-  const f = (async (_url: string, init: { body: string }) => {
-    sent.push(JSON.parse(init.body).text);
+  const docs: Array<{ name: string; caption: string }> = [];
+  const f = (async (_url: string, init: { body: string | FormData }) => {
+    if (init.body instanceof FormData) docs.push({ name: (init.body.get('document') as File).name, caption: String(init.body.get('caption') ?? '') });
+    else sent.push(JSON.parse(init.body).text);
     return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 });
   }) as unknown as typeof fetch;
-  return { fetch: f, sent };
+  return { fetch: f, sent, docs };
 }
 
 function fakeSdk(answer: string | ((req: ClaudeRequest) => ClaudeResponse | Promise<ClaudeResponse>)): { sdk: ClaudeSdk; requests: ClaudeRequest[] } {
@@ -96,22 +98,24 @@ async function verify(over: Partial<VerifyDeps> & { runs?: GhRun[]; logs?: Recor
     readHealthRows: async () => [['2026-10-20', 'Nightly', '—', '1', '✅ ok', 6, 0, 0, '', ''], ['2026-11-03', 'Nightly', 'yes (2026-11-02)', 'no', '❌ did not run', 0, 0, 0, 'Nightly did not run', '']],
     appendRows: async (rows) => { appended.push(...rows); return rows.length; },
     sleep: async () => {},
+    toPdf: null, // no browser: ONE message (the PDF path has its own test)
     ...over,
   });
-  return { res, sent: tg.sent, rows: appended };
+  return { res, sent: tg.sent, docs: tg.docs, rows: appended };
 }
 
 describe('ops-verify: no Anthropic key', () => {
-  test('the watchdog table for 3 days + one line, no Opus call, one Verify row', async () => {
+  test('the watchdog table for 3 days + one line, no Opus call, one Verify row; Telegram: ONE short message', async () => {
     const { sdk, requests } = fakeSdk('unused');
     const r = await verify({ sdk });
     assert.equal(r.res.state, 'no-key');
     assert.equal(requests.length, 0, 'no call without a key');
-    assert.equal(r.sent.length, 1);
-    assert.match(r.sent[0] as string, /^🩺 Verify — .* \(last 72 h\)/);
-    assert.match(r.sent[0] as string, /Nightly did not run for 2026-11-02/);
-    assert.match(r.sent[0] as string, /analyze\.yml run failure/);
-    assert.ok((r.sent[0] as string).endsWith(VERIFY_NO_KEY));
+    const m = r.res.messages[0] as string;
+    assert.match(m, /^🩺 Verify — .* \(last 72 h\)/);
+    assert.match(m, /Nightly did not run for 2026-11-02/);
+    assert.match(m, /analyze\.yml run failure/);
+    assert.ok(m.endsWith(VERIFY_NO_KEY));
+    assert.deepEqual(r.sent, ['🩺 Verify (3 days): Something failed or did not run.\n' + VERIFY_NO_KEY], 'the bottom line only');
     assert.equal(VERIFY_NO_KEY, 'Opus diagnosis off (no Anthropic key saved)');
     assert.equal(r.rows.length, 1);
     assert.equal(r.rows[0]![1], VERIFY_ROW_JOB);
@@ -137,12 +141,14 @@ describe('ops-verify: with a key', () => {
     assert.match(req.messages[0]!.content, /DID NOT RUN \(1\):\n- Nightly did not run for 2026-11-02/);
     assert.match(req.messages[0]!.content, /RUN HEALTH TAB ROWS[^\n]*\n- 2026-11-03 \| Nightly/);
     assert.ok(!req.messages[0]!.content.includes('2026-10-20'), 'only the rows of the checked days');
-    // Telegram: the table, then the answer in parts of at most 4096 characters.
-    assert.ok(r.sent.length >= 4, String(r.sent.length));
-    assert.match(r.sent[0] as string, /^🩺 Verify/);
-    assert.match(r.sent[1] as string, /^🧠 Opus diagnosis \(last 3 days\)\n\nVERDICT: some issues\./);
+    // The result: the table, then the answer. Telegram (no browser): ONE message, the bottom line and the answer
+    // (Telegram's own 4096-character parts).
+    assert.match(r.res.messages[0] as string, /^🩺 Verify/);
+    assert.match(r.res.messages[1] as string, /^🧠 Opus diagnosis \(last 3 days\)\n\nVERDICT: some issues\./);
+    assert.match(r.sent[0] as string, /^🩺 Verify \(3 days\): some issues\.\n\n🧠 Opus diagnosis/);
     assert.ok(r.sent.every((m) => m.length <= 4096));
-    assert.equal(r.sent.slice(1).join('\n').split(' | Nightly missing').length - 1, 120, 'nothing lost in the split');
+    assert.ok(!r.sent.join('\n').includes('Top problems'), 'the watchdog table is not sent as text');
+    assert.equal(r.sent.join('\n').split(' | Nightly missing').length - 1, 120, 'nothing lost in the split');
     assert.match(String(r.rows[0]![8]), /^some issues\./);
     assert.deepEqual(r.res.usage, { inputTokens: 12_000, outputTokens: 900, cacheReadInputTokens: null, cacheCreationInputTokens: null });
   });
@@ -185,8 +191,10 @@ describe('ops-verify: with a key', () => {
     const refusal = fakeSdk(() => ({ stop_reason: 'refusal', content: [] }));
     const r1 = await verify({ env, sdk: refusal.sdk });
     assert.equal(r1.res.state, 'opus-failed');
-    assert.match(r1.sent[0] as string, /^🩺 Verify/);
-    assert.match(r1.sent[r1.sent.length - 1] as string, /Opus diagnosis: not available this time \(refusal\)/);
+    assert.match(r1.res.messages[0] as string, /^🩺 Verify/);
+    assert.match(r1.res.messages[r1.res.messages.length - 1] as string, /Opus diagnosis: not available this time \(refusal\)/);
+    assert.equal(r1.sent.length, 1);
+    assert.match(r1.sent[0] as string, /^🩺 Verify \(3 days\): .*\nOpus diagnosis not available this time$/);
     const boom = fakeSdk(() => { throw Object.assign(new Error('overloaded ' + ANTHROPIC), { status: 529 }); });
     const lines: string[] = [];
     const r2 = await verify({ env, sdk: boom.sdk, log: (l) => lines.push(l) });
@@ -197,7 +205,23 @@ describe('ops-verify: with a key', () => {
   test('a fallback model answered: the header says which', async () => {
     const { sdk } = fakeSdk(() => ({ model: 'claude-sonnet-x', stop_reason: 'end_turn', content: [{ type: 'text', text: 'VERDICT: healthy.' }] }));
     const r = await verify({ env, sdk });
-    assert.match(r.sent[1] as string, /answered by claude-sonnet-x/);
+    assert.match(r.res.messages[1] as string, /answered by claude-sonnet-x/);
+  });
+});
+
+describe('ops-verify: the clean Telegram policy', () => {
+  test('with a browser: ONE PDF (the table and the answer inside), the bottom line as its caption, no text message', async () => {
+    const { sdk } = fakeSdk('VERDICT: healthy.\nNothing to fix.');
+    let html = '';
+    const fs = await import('node:fs');
+    const r = await verify({ env: { ...ENV, ANTHROPIC_API_KEY: ANTHROPIC }, sdk, toPdf: async (h, p) => { html = h; fs.writeFileSync(p, '%PDF-1.4 test'); } });
+    assert.equal(r.res.state, 'ok');
+    assert.deepEqual(r.sent, [], 'no text message');
+    assert.equal(r.docs.length, 1);
+    assert.equal(r.docs[0]!.name, 'verify-20261104.pdf');
+    assert.equal(r.docs[0]!.caption, '🩺 Verify (3 days): healthy.');
+    assert.match(html, /Opus diagnosis/);
+    assert.match(html, /Nightly did not run for 2026-11-02/);
   });
 });
 
@@ -207,7 +231,9 @@ describe('ops-verify: never throws', () => {
     const r = await verify({ env: { ...ENV, ANTHROPIC_API_KEY: ANTHROPIC }, sdk, ghFail: true });
     assert.equal(r.res.state, 'collect-failed');
     assert.equal(requests.length, 0);
-    assert.match(r.sent[0] as string, /❌ the runs could not be read: GitHub API HTTP 500/);
+    assert.match(r.res.messages[0] as string, /❌ the runs could not be read: GitHub API HTTP 500/);
+    assert.equal(r.sent.length, 1);
+    assert.match(r.sent[0] as string, /^🩺 Verify \(3 days\): ❌ the runs could not be read: GitHub API HTTP 500 for \/runs$/);
   });
   test('no GitHub token, the sheet and Telegram both failing, a throwing reader: still resolves', async () => {
     const r1 = await runVerify({ env: {}, now: NOW });
@@ -216,7 +242,7 @@ describe('ops-verify: never throws', () => {
     const badTg = (async () => { throw new Error('network down'); }) as unknown as typeof fetch;
     const lines: string[] = [];
     const r2 = await runVerify({
-      env: ENV, now: NOW, fetchImpl: fakeGitHub(s.runs, s.logs), telegramFetch: badTg, log: (l) => lines.push(l),
+      env: ENV, now: NOW, fetchImpl: fakeGitHub(s.runs, s.logs), telegramFetch: badTg, log: (l) => lines.push(l), toPdf: null,
       readHealthRows: () => { throw new Error('sheet gone'); },
       appendRows: async () => { throw new Error('quota'); },
     });

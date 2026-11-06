@@ -1,8 +1,9 @@
 /**
  * The nightly step 'live.dryRun' (phase 1, 1.6): after 'paper.trade', plans what the real $1,000 account WOULD trade
  * at the next open to match the followed paper account, checks the plan against every rail, appends it to 💵 Live Log
- * ('planned (dry run)' rows and the daily values row) and sends "💵 Live bot (dry run, $1,000): would SELL … / BUY …"
- * to Telegram right after the paper test's daily report. No broker, no server, no order is ever sent.
+ * ('planned (dry run)' rows and the daily values row) and writes "💵 Live bot (dry run, $1,000): would SELL … / BUY …"
+ * to the run log. Telegram gets ONE line only when the owner is needed (liveAttention: a fall alert, a refused plan,
+ * a stale signal; notify/policy.ts). No broker, no server, no order is ever sent.
  *
  * The account followed: LIVE_FOLLOW_ACCOUNT, or by default ('auto') the best account of the fee report among those
  * that beat Hold QQQ and Hold the research list after fees and tax; none when no account does (a plain message says so).
@@ -15,7 +16,8 @@ import type { TabStore, TabCell } from '../storage/tabStore.ts';
 import type { FetchedChart } from '../types/chart.ts';
 import { loadPaper, seriesFromChart } from '../paper/paperJob.ts';
 import { appendNight } from '../paper/paperLog.ts';
-import { sendMessage, type TelegramDeps } from '../notify/telegram.ts';
+import type { TelegramDeps } from '../notify/telegram.ts';
+import { notifyIfNeeded } from '../notify/policy.ts';
 import type { LiveConfig } from './liveConfig.ts';
 import { lastClosedTradingDay } from './marketCalendar.ts';
 import { supportOf, targetWeights } from './target.ts';
@@ -49,8 +51,10 @@ export interface LiveNight {
   readonly rails: RailResult | null;
   /** Rows appended to the log tonight (0 = the day was already there, or nothing to log). */
   readonly logged: number;
-  /** The Telegram text, or null when nothing is sent (an already planned day). */
+  /** The full night's text (the run log), or null for an already planned day. Telegram gets liveAttention only. */
   readonly message: string | null;
+  /** Tonight's fall alerts (account.ts fallAlerts); empty or absent = none. */
+  readonly alerts?: readonly string[];
   readonly outcome: string;
 }
 
@@ -151,12 +155,27 @@ export async function planLiveNight(d: LiveJobDeps): Promise<LiveNight> {
     ...alerts, '', ...feeLines, '', 'Dry run: no broker is connected; nothing was sent. Account: ' + src.name + '.',
   ].join('\n') : null;
   const outcome = 'Live bot (dry run) ' + day + ', ' + id + ': ' + (stale ? 'refused (stale signal), not logged' : logged ? plan.orders.length + ' order(s) planned, ' + (rails.ok ? 'rails OK' : 'rails refused some') : 'already planned');
-  return { day, account: id, plan, rails, logged, message, outcome };
+  return { day, account: id, plan, rails, logged, message, outcome, alerts };
 }
 
-/** One night: plan, log, and the Telegram message (a Telegram failure only logs). */
+/**
+ * The ONE line the owner needs from tonight's dry run, or null (clean policy, notify/policy.ts): a fall past an alert
+ * level, a plan the rails refused, or a stale signal. A normal night (plan logged, rails OK) sends nothing.
+ */
+export function liveAttention(n: LiveNight, alerts: readonly string[] = []): string | null {
+  if (!n.day) return null;
+  if (alerts.length) return '💵 Live bot ' + n.day + ': ' + alerts.join(' ');
+  if (n.outcome.includes('refused (stale signal)')) return '💵 Live bot ' + n.day + ': the signal is stale (late or missing Nightly); nothing was planned.';
+  if (n.rails && n.rails.planRefusals.length) return '💵 Live bot ' + n.day + ': the rails REFUSED the plan: ' + n.rails.planRefusals.join('; ');
+  return null;
+}
+
+/** One night: plan and log; the full text goes to the run log, Telegram gets one line only when needed (liveAttention). */
 export async function runLiveDryRun(d: LiveJobDeps): Promise<string> {
   const n = await planLiveNight(d);
-  if (n.message && d.telegram) await sendMessage(d.telegram.deps, d.telegram.chatId, n.message).catch((e) => d.log('live bot: Telegram failed: ' + String(e)));
+  // Fix 2026-11-06: one line at a time, so each line gets its own level (the whole text was one ERROR line when any
+  // single line carried a failure mark, e.g. a ❌ next to one stock).
+  if (n.message) for (const line of n.message.split('\n')) if (line.trim()) d.log(line);
+  if (d.telegram && n.message) await notifyIfNeeded(d.telegram, liveAttention(n, n.alerts ?? []), (m) => d.log('live bot: ' + m));
   return n.outcome;
 }

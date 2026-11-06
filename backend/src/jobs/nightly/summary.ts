@@ -15,7 +15,7 @@ export interface StepOutcome {
   readonly id: string;
   readonly label: string;
   readonly state: OutcomeState;
-  /** Plain reason for the report. Absent when ok. */
+  /** Plain reason for the report. When ok, only an expected gap (log line only; the report skips ok steps). */
   readonly reason?: ReportSentence;
   /** Technical, log only. */
   readonly detail?: LogDetail;

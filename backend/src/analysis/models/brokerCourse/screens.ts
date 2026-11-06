@@ -123,6 +123,37 @@ export function filingKeywordReadV1(
   };
 }
 
+export interface CheckedFilingKeywordRead extends FilingKeywordRead {
+  /** Keywords whose search failed (null count): present, and non-empty, only when at least one did. */
+  readonly uncheckedKeywords?: readonly string[];
+}
+
+/**
+ * Fix 2026-11-05 (the false clean): filingKeywordReadV1 skips a null count, so when SEC's full-text search
+ * failed for some keyword (HTTP 500 after retries) the read still said "No recent filings match the course's
+ * red-flag keyword list" -- a claim about keywords nobody checked. This read names the unchecked keywords
+ * ("could not check: offering, shelf") and limits any "no match" claim to the keywords that answered.
+ *
+ * When every keyword answered (no null count) the result is filingKeywordReadV1's, unchanged (no extra field).
+ * Callers mark their section degraded when `uncheckedKeywords` is present.
+ */
+export function filingKeywordRead(
+  hits: Record<string, number | null> | null | undefined,
+): CheckedFilingKeywordRead | null {
+  const base = filingKeywordReadV1(hits);
+  if (!base || !hits) return base;
+  const keys = Object.keys(hits);
+  const uncheckedKeywords = keys.filter((k) => hits[k] == null);
+  if (!uncheckedKeywords.length) return base;
+  const checked = keys.filter((k) => hits[k] != null);
+  const couldNot = 'could not check: ' + uncheckedKeywords.join(', ') + ' (SEC full-text search failed)';
+  let read: string;
+  if (base.anyFound) read = base.read + ' Also ' + couldNot + '.';
+  else if (checked.length) read = 'No recent filings match the checked red-flag keywords (' + checked.join(', ') + '); ' + couldNot;
+  else read = 'Filing keyword search incomplete — ' + couldNot;
+  return { ...base, read, uncheckedKeywords };
+}
+
 export interface BusinessCyclePhase {
   readonly phase: string;
   readonly latestQGrowth: number;

@@ -24,9 +24,9 @@ export const ISRAEL_ZONE: string = USER_ZONE;
 
 /** Only these action versions may appear in any workflow. */
 export const ALLOWED_ACTIONS: readonly string[] = [
-  'actions/checkout@v4',
-  'actions/setup-node@v4',
-  'actions/upload-artifact@v4',
+  'actions/checkout@v5',
+  'actions/setup-node@v5',
+  'actions/upload-artifact@v5',
 ];
 
 /** Relative to backend/. The first folder that holds nightly.yml is used. */

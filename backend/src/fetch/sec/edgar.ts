@@ -13,10 +13,12 @@
  * secUserAgentsFromEnv(). The contact email is used for nothing else.
  */
 
-import type { HttpClient } from '../../net/http.ts';
+import type { HttpClient, HttpResponse } from '../../net/http.ts';
 import { secUserAgents, SEC_CONTACT_EMAIL_ENV } from '../../net/http.ts';
 import type { Clock } from '../../core/context.ts';
 import { formatDateInTz } from '../../core/dates.ts';
+import { backoffMs, sleep as realSleep } from '../../core/errors.ts';
+import { currentSignal } from '../../core/cancel.ts';
 import { cacheGet, cacheSet, type PropertyStore } from '../../storage/kv.ts';
 
 /** Legacy's placeholder headers (replaced on SEC hosts by the client's user-agent policy). */
@@ -147,11 +149,44 @@ export async function fetchSharesOutstandingHistory(deps: Pick<SecDeps, 'http'>,
 }
 
 /**
+ * Fix 2026-11-05 (live logs 4 and 5 Nov: the efts.sec.gov full-text search answers HTTP 500 a few times a night):
+ * a 5xx or a network error on one keyword's search is retried `retries` times with a short jittered backoff
+ * (500 ms, then 1 s, each + up to 1 s jitter) -- one request at a time per keyword, through the same client
+ * (per-host limiter, SEC User-Agent policy), so well inside SEC's 10 req/s. 4xx (429 included) and a cancelled
+ * step are not retried. Legacy-parity callers pass retries: 0 (legacy: one try per keyword).
+ */
+export interface KeywordSearchOptions {
+  /** Retries after the first try (default KEYWORD_SEARCH_RETRIES). */
+  readonly retries?: number;
+  /** Tests: no real waits. */
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly random?: () => number;
+}
+export const KEYWORD_SEARCH_RETRIES = 2;
+export const KEYWORD_SEARCH_BACKOFF_BASE_MS = 500;
+export const KEYWORD_SEARCH_BACKOFF_MAX_MS = 2000;
+
+/** One search, retried on 5xx / network error. Resolves the last response; rejects with the last error. */
+async function searchWithRetry(http: HttpClient, url: string, o: KeywordSearchOptions): Promise<HttpResponse> {
+  const retries = Math.max(0, o.retries ?? KEYWORD_SEARCH_RETRIES);
+  for (let attempt = 0; ; attempt++) {
+    const out = await http.fetch({ url, headers: SEC_HEADERS, muteHttpExceptions: true })
+      .then((res) => ({ res, err: undefined as unknown }), (err: unknown) => ({ res: null, err }));
+    const transient = out.res ? out.res.status >= 500 : !currentSignal()?.aborted;
+    if (!transient || attempt >= retries) {
+      if (out.res) return out.res;
+      throw out.err;
+    }
+    await (o.sleep ?? realSleep)(backoffMs(attempt + 1, KEYWORD_SEARCH_BACKOFF_BASE_MS, KEYWORD_SEARCH_BACKOFF_MAX_MS, o.random));
+  }
+}
+
+/**
  * fetchSecFilingKeywordHitsV1 (:1468-1497): one EDGAR full-text search per
  * keyword, in order; a hit count, 0 when the response has no total, or null
- * on any failure. The window ends today (UTC).
+ * on any failure (after the retries above). The window ends today (UTC).
  */
-export async function fetchSecFilingKeywordHits(deps: Pick<SecDeps, 'http' | 'clock'>, cik: string | null | undefined, sinceDate?: string | null): Promise<Record<string, number | null> | null> {
+export async function fetchSecFilingKeywordHits(deps: Pick<SecDeps, 'http' | 'clock'>, cik: string | null | undefined, sinceDate?: string | null, opts: KeywordSearchOptions = {}): Promise<Record<string, number | null> | null> {
   if (!cik) return null;
   const cikNum = String(parseInt(cik, 10));
   const results: Record<string, number | null> = {};
@@ -160,7 +195,7 @@ export async function fetchSecFilingKeywordHits(deps: Pick<SecDeps, 'http' | 'cl
       let url = 'https://efts.sec.gov/LATEST/search-index?q=' + encodeURIComponent('"' + kw + '"') +
         '&ciks=' + ('0'.repeat(Math.max(0, 10 - cikNum.length)) + cikNum);
       if (sinceDate) url += '&dateRange=custom&startdt=' + sinceDate + '&enddt=' + formatDateInTz(new Date(nowOf(deps)), 'UTC');
-      const res = await deps.http.fetch({ url, headers: SEC_HEADERS, muteHttpExceptions: true });
+      const res = await searchWithRetry(deps.http, url, opts);
       if (res.status === 200) {
         const parsed = JSON.parse(res.text());
         const total = parsed && parsed.hits && parsed.hits.total;

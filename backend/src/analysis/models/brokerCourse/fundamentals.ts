@@ -14,7 +14,7 @@
  * unreachable from the report builder.
  */
 
-import { sharesOutstandingTrendReadV1, filingKeywordReadV1, type SharesOutstandingPoint } from './screens.ts';
+import { sharesOutstandingTrendReadV1, filingKeywordRead, type SharesOutstandingPoint } from './screens.ts';
 
 export interface RevenueRedFlag {
   readonly isRedFlag: boolean;
@@ -104,7 +104,7 @@ export function fundamentalsScreenReadV1(
   const revenueFlag = revenueRedFlagV1(revenueGrowth);
   const lockup = lockupExpirationReadV1(firstTradeDate, now);
   const sharesTrend = sharesOutstandingHistory !== undefined ? sharesOutstandingTrendReadV1(sharesOutstandingHistory) : null;
-  const filingFlag = filingKeywordHits !== undefined ? filingKeywordReadV1(filingKeywordHits) : null;
+  const filingFlag = filingKeywordHits !== undefined ? filingKeywordRead(filingKeywordHits) : null; // fix 2026-11-05: names keywords SEC could not check
 
   const evidence: string[] = [];
   let tag: FundamentalsTag = 'No red flags found';

@@ -10,8 +10,8 @@
  *              user's rule), written into the Exit report's AI SUMMARIES section.
  *              Plan #47 (owner 2026-11-04): when the Exit Opus box is ticked, one extra Opus call reads the whole Exit
  *              report (every stock and option) and writes a short portfolio view (ai/portfolioOpus.ts) at the top of
- *              the AI SUMMARIES section (its headline in the report's top status line) and sends it to Telegram when
- *              TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are set. Display only.
+ *              the AI SUMMARIES section (its headline in the report's top status line); it reaches Telegram inside the
+ *              Exit PDFs only (a view that is off or failed sends one plain line). Display only.
  * The nightly must have built both report tabs first; otherwise a plain message says so.
  * Exit status: 0 done (even with failed legs), 1 bad inputs or a crash.
  */
@@ -39,7 +39,7 @@ import { writeBuyAiSummaries } from './reports/buySheet/buySheet.ts';
 import { BUY_SHEET_TAB } from './reports/buySheet/text.ts';
 import { writeAiSummaries, readExitReportRows, EXIT_SHEET_TAB } from './reports/exitSheet/exitSheet.ts';
 import { portfolioOpusView, exitReadText, type PortfolioView } from './ai/portfolioOpus.ts';
-import { sendMessage } from './notify/telegram.ts';
+import { notifyIfNeeded } from './notify/policy.ts';
 import { dateStringInTz } from './analysis/macroRegime.ts';
 import { occExpiryText } from './core/dates.ts';
 import type { BuyTier } from './reports/buySheet/types.ts';
@@ -192,12 +192,15 @@ export async function aiMain(argv: readonly string[], io: CliIo = STD_IO, over: 
   return 0;
 }
 
-/** Plan #47: the portfolio view (or its one plain line) as one Telegram message, when Telegram is set up. Never fails the run. */
+/**
+ * Plan #47 under the clean policy (notify/policy.ts): a written view is NOT sent (it is in the Exit report, so in the
+ * /exit and Exit Report PDFs); only a view that is off or failed sends its ONE plain line. Never fails the run.
+ * Returns true when a line was sent.
+ */
 export async function sendPortfolioView(pv: PortfolioView, env: Readonly<Record<string, string | undefined>>, io: CliIo, fetchImpl?: typeof fetch): Promise<boolean> {
   const token = (env.TELEGRAM_BOT_TOKEN ?? '').trim(), chatId = (env.TELEGRAM_CHAT_ID ?? '').trim();
-  if (!token || !chatId) return false;
-  return sendMessage({ token, ...(fetchImpl ? { fetchImpl } : {}) }, chatId, pv.telegram)
-    .then(() => true, () => { io.err('Telegram: the portfolio view could not be sent.\n'); return false; });
+  if (!token || !chatId || pv.state === 'ok') return false;
+  return notifyIfNeeded({ deps: { token, ...(fetchImpl ? { fetchImpl } : {}) }, chatId }, '📊 ' + pv.telegram, () => { io.err('Telegram: the portfolio view line could not be sent.\n'); });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

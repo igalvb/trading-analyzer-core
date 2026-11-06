@@ -440,7 +440,7 @@ export async function runExitPipeline(ctx: RunContext, deps: ExitPipelineDeps, o
     }, async () => {
       let hasRealDate = !!entryStr;
       let fallback: EntryDateFallback = hasRealDate ? null : 'NO_ENTRY_DATE';
-      let r: Rec | null = hasRealDate ? analyzers.stockSinceEntry(h.ticker, h.avgCost as number, sinceEntryDateStr(entryStr as string, assumed, chart), chart, readOpts) : null;
+      let r: Rec | null = hasRealDate ? analyzers.stockSinceEntry(h.ticker, h.avgCost as number, sinceEntryDateStr(entryStr as string, assumed, chart), chart, assumed ? { ...readOpts, assumedEntryBasis: ASSUMED_ENTRY_BASIS } : readOpts) : null;
       if (!hasRealDate || (r && r.error)) {
         if (hasRealDate) { hasRealDate = false; fallback = 'ENTRY_DATE_UNUSABLE'; tctx.log.info('since-entry read refused, using generic lookback', { detail: String(r && r.error) }); }
         r = analyzers.stockFixedLookback(h.ticker, h.avgCost as number, chart, readOpts);
@@ -554,7 +554,10 @@ export async function runExitPipeline(ctx: RunContext, deps: ExitPipelineDeps, o
       }
       overlay = weeklyOverlay({
         directions: directionsByTicker.get(h.ticker) ?? null,
-        chart, read: tw, entryDay: hasRealDate ? (entryStr as string) : null, realEntry: hasRealDate, price: underPrice,
+        // Fix 2026-11-06 (owner rule 4: a call follows the UNDERLYING's weekly stop): the weekly anchor is the stock's own
+        // 26-week window, never the contract's purchase date, so every call on one stock shows the same weekly stop
+        // (live 6 Nov: two MRVL calls showed $122.66 and $204.73). The entry still dates the old daily-stop breach.
+        chart, read: tw, entryDay: hasRealDate ? (entryStr as string) : null, realEntry: false, price: underPrice,
         fundScore: fundScoreByTicker.get(h.ticker) ?? null, cost: null, taxRate, nowMs: startedAtMs,
       });
       decision = optionOverlayDecision(overlay, typeof r.daysToExpiry === 'number' ? r.daysToExpiry : null, !!r.isLeapsAtEntry, h.contracts);

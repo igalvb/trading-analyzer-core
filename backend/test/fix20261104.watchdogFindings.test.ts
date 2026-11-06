@@ -78,7 +78,7 @@ describe('1. SEC shares-outstanding: two-class filers (MSTR)', () => {
     assert.equal(legacy.urls.length, 1);
   });
 
-  test('no concept at all: ONE WARNING that the screen is skipped, no ERROR', async () => {
+  test('no concept at all (every concept URL 404): ONE line that the screen is skipped, no ERROR (INFO since fix 2026-11-05)', async () => {
     const lines: LogLine[] = [];
     const ctx = ctxOf(lines);
     const tap = new TappingTransport(new MapTransport([]));
@@ -88,8 +88,9 @@ describe('1. SEC shares-outstanding: two-class filers (MSTR)', () => {
     assert.equal(r.ok, false);
     if (!r.ok) assert.equal(r.reason, 'NO_DATA_FOR_TICKER');
     assert.equal(lines.filter((l) => l.level >= LogLevel.ERROR).length, 0);
-    const warns = lines.filter((l) => l.level === LogLevel.WARNING);
-    assert.deepEqual(warns.map((l) => l.message), ['SEC shares-outstanding history MSTR found no data [NO_DATA_FOR_TICKER]: skipped for this ticker']);
+    assert.equal(lines.filter((l) => l.level === LogLevel.WARNING).length, 0);
+    const notes = lines.filter((l) => l.level === LogLevel.INFO && l.message.includes('found no data'));
+    assert.deepEqual(notes.map((l) => l.message), ['SEC shares-outstanding history MSTR found no data [NO_DATA_FOR_TICKER]: skipped for this ticker']);
   });
 
   test('without the note (every other step) the old ERROR stays', async () => {
