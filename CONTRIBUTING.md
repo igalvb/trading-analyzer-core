@@ -8,7 +8,7 @@ The core is private and versioned (`VERSION`, `CHANGELOG.md`). The repo owner ap
 | 2 | Open a pull request to `main` of the core with the template filled in |
 | 3 | The checks must pass: `cd backend && npm ci && npm run typecheck && npm test` (also run by the PR check) |
 | 4 | Wait for the owner's approval. Nobody merges without it |
-| 5 | After the merge the owner (or the AI session) tags the new version and writes the CHANGELOG entry |
+| 5 | After the merge the owner (or the AI session) marks the new version (branch `release/vX.Y.Z`, plus `VERSION`) and writes the CHANGELOG entry |
 
 ## Version numbers (MAJOR.MINOR.PATCH)
 

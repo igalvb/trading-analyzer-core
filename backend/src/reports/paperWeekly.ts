@@ -152,6 +152,27 @@ const isYardstickGroup = (g: string): boolean => g.startsWith('📊');
 const pct = (v: number, base: number): number => (base > 0 ? (v / base - 1) * 100 : 0);
 
 /**
+ * Log rows written under a part of an account ("Everything together, shares half" / ", LEAPS half": paperLab.ts ALL_SHARES)
+ * belong to the 📈 Paper Values account they are part of ("Everything together (...)"): folded into it, the part shown in
+ * the trade log's When column (fix 2026-11-06, live QA: the account's trade log and its trade counts were empty).
+ */
+export function foldSubAccounts(values: readonly ValueRow[], log: readonly LogRow[]): (LogRow & { readonly part?: string })[] {
+  const names = [...new Set(values.map((v) => v.account))];
+  const known = new Set(names);
+  const parentOf = new Map<string, string | null>();
+  return log.map((t) => {
+    if (known.has(t.account)) return t;
+    if (!parentOf.has(t.account)) {
+      const head = t.account.split(',')[0]!.trim();
+      const cands = head && head !== t.account ? names.filter((n) => n === head || n.startsWith(head + ' (')) : [];
+      parentOf.set(t.account, cands.length === 1 ? cands[0]! : null);
+    }
+    const parent = parentOf.get(t.account);
+    return parent ? { ...t, account: parent, part: t.account.slice(t.account.indexOf(',') + 1).trim() } : t;
+  });
+}
+
+/**
  * The week's report from the two tabs' rows, or null when 📈 Paper Values has no day in that week. Every account with
  * a row on or before the week's Friday is in it.
  */
@@ -180,7 +201,8 @@ export function buildWeekly(values: readonly ValueRow[], log: readonly LogRow[],
     return start == null ? null : pct(end, start);
   };
   const counts = new Map<string, { buys: number; sells: number }>();
-  const trades = log.filter((t) => t.day >= week.monday && t.day <= week.friday);
+  // Fix 2026-11-06: rows logged under a part of an account ("Everything together, shares half") count for that account.
+  const trades = foldSubAccounts(values, log).filter((t) => t.day >= week.monday && t.day <= week.friday);
   for (const t of trades) {
     if (t.when !== 'filled') continue;
     const c = counts.get(t.account) ?? { buys: 0, sells: 0 };

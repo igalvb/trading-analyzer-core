@@ -128,20 +128,35 @@ export const NIGHTLY_BACKUP_CUTOFF_UTC_HOUR = 13;
  */
 export const NIGHTLY_STEP_ORDER: readonly string[] = ALL_NIGHTLY_STEPS.map((s) => s.id);
 
+/**
+ * The phone dashboard (docs/DASHBOARD.md): the five report workflows end with one step "Publish the dashboard" that runs
+ * only when the two Cloudflare secrets are set (skipped silently otherwise; continue-on-error, so a failed upload never
+ * fails the run): `npm run dashboard-build`, then wrangler (pinned) uploads out/dashboard to the Pages project.
+ */
+export const DASHBOARD_SECRETS: readonly string[] = ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'];
+export const DASHBOARD_PUBLISH_STEP = 'Publish the dashboard';
+export const DASHBOARD_PUBLISH_COMMAND = 'npm run dashboard-build -- --out out/dashboard';
+/** The wrangler release the upload uses (exact; npx --yes fetches it). */
+export const WRANGLER = 'wrangler@3.99.0';
+/** The Pages project when the repository variable DASHBOARD_PROJECT is empty (another user: "-<user>" added). */
+export const DASHBOARD_DEFAULT_PROJECT = 'trading-dashboard';
+/** The workflows that publish the dashboard at their end. */
+export const DASHBOARD_PUBLISHERS: readonly string[] = ['nightly.yml', 'analyze.yml', 'exit-report.yml', 'send-exit.yml', 'my-options.yml'];
+
 export const NIGHTLY: WorkflowSpec = {
   file: 'nightly.yml', crons: [], relayCrons: [NIGHTLY_CRON], dispatch: true, timeoutMinutes: 120, concurrencyGroup: perUserGroup('sheet-report-writers'), perUser: true, readsProfile: true,
   // Row 38: actions: read for the digest's "GitHub minutes this month" line (reports/digest/actionsMinutes.ts).
   actionsRead: true,
-  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'SEC_CONTACT_EMAIL', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
-  commands: ['npm run nightly', 'npm run lock-sheets'],
+  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'SEC_CONTACT_EMAIL', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'],
+  commands: ['npm run nightly', 'npm run lock-sheets', DASHBOARD_PUBLISH_COMMAND],
 };
 export const MY_OPTIONS: WorkflowSpec = {
   file: 'my-options.yml', crons: [MY_OPTIONS_CRON_EDT, MY_OPTIONS_CRON_EST], dispatch: true, timeoutMinutes: 15, concurrencyGroup: perUserGroup('my-options'), perUser: true, readsProfile: true,
   // Owner 2026-11-04: the guard asks GitHub whether My Options already succeeded since 17:00 New York (late firings).
   ghActionsRead: true,
   // F-B10-1: compose.ts requires SEC_CONTACT_EMAIL for every run (SEC user agent), so my-options needs it too.
-  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'SEC_CONTACT_EMAIL'],
-  commands: ['npm run my-options', 'npm run lock-sheets'],
+  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'SEC_CONTACT_EMAIL', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'],
+  commands: ['npm run my-options', 'npm run lock-sheets', DASHBOARD_PUBLISH_COMMAND],
 };
 export const AI_DISPATCH: WorkflowSpec = {
   file: 'ai-dispatch.yml', crons: [], dispatch: true, timeoutMinutes: 30, concurrencyGroup: perUserGroup('sheet-report-writers'), perUser: true, readsProfile: true,
@@ -173,14 +188,14 @@ export const TELEGRAM_CHECK: WorkflowSpec = {
  */
 export const ANALYZE: WorkflowSpec = {
   file: 'analyze.yml', crons: [], dispatch: true, timeoutMinutes: 30, concurrencyGroup: perUserGroup('sheet-report-writers'), perUser: true, readsProfile: true,
-  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'SEC_CONTACT_EMAIL', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
-  commands: ['npm run analyze-report', 'npm run lock-sheets'],
+  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'SEC_CONTACT_EMAIL', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'],
+  commands: ['npm run analyze-report', 'npm run lock-sheets', DASHBOARD_PUBLISH_COMMAND],
 };
 /** The Exit step alone from the phone (src/exitReportPdf.ts): Sheet, PDF, Telegram. Queues behind the nightly. */
 export const EXIT_REPORT: WorkflowSpec = {
   file: 'exit-report.yml', crons: [], dispatch: true, timeoutMinutes: 30, concurrencyGroup: perUserGroup('sheet-report-writers'), perUser: true, readsProfile: true,
-  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'SEC_CONTACT_EMAIL', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
-  commands: ['npm run exit-report-pdf', 'npm run lock-sheets'],
+  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'SEC_CONTACT_EMAIL', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'],
+  commands: ['npm run exit-report-pdf', 'npm run lock-sheets', DASHBOARD_PUBLISH_COMMAND],
 };
 /**
  * Telegram /exit (src/sendExit.ts): the saved Exit Report as a PDF; the Exit AI (Gemini) first when its section is empty.
@@ -189,8 +204,8 @@ export const EXIT_REPORT: WorkflowSpec = {
  */
 export const SEND_EXIT: WorkflowSpec = {
   file: 'send-exit.yml', crons: [], dispatch: true, timeoutMinutes: 20, concurrencyGroup: perUserGroup('sheet-report-writers'), perUser: true, readsProfile: true,
-  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'SEC_CONTACT_EMAIL', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
-  commands: ['npm run send-exit', 'npm run ai', 'npm run lock-sheets'],
+  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'SEC_CONTACT_EMAIL', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'],
+  commands: ['npm run send-exit', 'npm run ai', 'npm run lock-sheets', DASHBOARD_PUBLISH_COMMAND],
 };
 /** One-time: connect the bot to the Cloudflare relay and set its menu (src/telegramSetup.ts). */
 export const TELEGRAM_SETUP: WorkflowSpec = {
@@ -272,7 +287,13 @@ export const INIT_USER_SHEETS: WorkflowSpec = {
   secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
   commands: ['npm run init-user-sheets'],
 };
-export const WORKFLOWS: readonly WorkflowSpec[] = [NIGHTLY, NIGHTLY_BACKUP, MY_OPTIONS, AI_DISPATCH, CI, RECORD, TELEGRAM_CHECK, ANALYZE, EXIT_REPORT, SEND_EXIT, TELEGRAM_SETUP, FETCH_FILES, MIGRATE_DATA_TABS, LONG_HISTORY, WATCHDOG, VERIFY, SETUP_CHECK, INIT_USER_SHEETS];
+/** The dashboard by hand (first publish or a refresh): build + upload, nothing else. Manual only; read-only on the sheets. */
+export const DASHBOARD: WorkflowSpec = {
+  file: 'dashboard.yml', crons: [], dispatch: true, timeoutMinutes: 15, concurrencyGroup: perUserGroup('dashboard'), perUser: true, readsProfile: true,
+  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'SEC_CONTACT_EMAIL', ...DASHBOARD_SECRETS],
+  commands: [DASHBOARD_PUBLISH_COMMAND],
+};
+export const WORKFLOWS: readonly WorkflowSpec[] = [NIGHTLY, NIGHTLY_BACKUP, MY_OPTIONS, AI_DISPATCH, CI, RECORD, TELEGRAM_CHECK, ANALYZE, EXIT_REPORT, SEND_EXIT, TELEGRAM_SETUP, FETCH_FILES, MIGRATE_DATA_TABS, LONG_HISTORY, WATCHDOG, VERIFY, SETUP_CHECK, INIT_USER_SHEETS, DASHBOARD];
 
 /** The six workflows that write the spreadsheets: the migration waits for their running runs, and they respect its pause. */
 export const SHEET_WRITER_WORKFLOWS: readonly WorkflowSpec[] = [NIGHTLY, ANALYZE, EXIT_REPORT, SEND_EXIT, AI_DISPATCH, MY_OPTIONS];

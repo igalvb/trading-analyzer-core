@@ -16,6 +16,7 @@ import {
   shouldRunNow, yamlSubsetProblems, MIGRATE_DATA_TABS, MIGRATION_STEPS, MIGRATION_BLOCKED_WINDOWS_UTC, SHEET_WRITER_WORKFLOWS, migrationBlockedWindow,
   OWNER_USER, PER_USER_ENV, PROFILE_STEP_IF, USER_INPUT, groupFor, perUserGroup, perUserSecretLine, secretNameFor,
   SETUP_CHECK, INIT_USER_SHEETS,
+  DASHBOARD, DASHBOARD_SECRETS, DASHBOARD_PUBLISH_STEP, DASHBOARD_PUBLISH_COMMAND, DASHBOARD_PUBLISHERS, WRANGLER, DASHBOARD_DEFAULT_PROJECT,
   WATCHDOG, WATCHDOG_CRON, VERIFY, NIGHTLY_BACKUP, NIGHTLY_BACKUP_CRONS, NIGHTLY_BACKUP_SINCE_UTC, NIGHTLY_BACKUP_CUTOFF_UTC_HOUR, myOptionsScheduledShouldRun, nightlyBackupAction,
 } from '../src/workflows/schedule.ts';
 import { DARK_POOL_DAILY_JOBS } from '../src/jobs/darkPool.ts';
@@ -386,10 +387,10 @@ describe('FL-8w the DATA agrees with the job modules', () => {
 });
 
 describe('GENERIC_PLAN P5: per-user workflows (the owner runs exactly as before)', () => {
-  const PER_USER = ['ai-dispatch.yml', 'analyze.yml', 'exit-report.yml', 'init-user-sheets.yml', 'my-options.yml', 'nightly.yml', 'send-exit.yml', 'setup-check.yml', 'telegram-check.yml', 'telegram-setup.yml', 'verify.yml', 'watchdog.yml'];
+  const PER_USER = ['ai-dispatch.yml', 'analyze.yml', 'dashboard.yml', 'exit-report.yml', 'init-user-sheets.yml', 'my-options.yml', 'nightly.yml', 'send-exit.yml', 'setup-check.yml', 'telegram-check.yml', 'telegram-setup.yml', 'verify.yml', 'watchdog.yml'];
   /** Owner 2026-11-06: the two set-up buttons read the Profile tab too (setup-check only reads; init-user-sheets adds missing tabs). */
   const SETUP_FILES = ['init-user-sheets.yml', 'setup-check.yml'];
-  const baseOf = (w: { file: string }): string => (w.file === 'my-options.yml' ? 'my-options' : w.file === 'watchdog.yml' ? 'watchdog' : w.file === 'verify.yml' ? 'verify' : w.file.startsWith('telegram-') ? 'telegram' : SETUP_FILES.includes(w.file) ? 'setup' : 'sheet-report-writers');
+  const baseOf = (w: { file: string }): string => (w.file === 'my-options.yml' ? 'my-options' : w.file === 'watchdog.yml' ? 'watchdog' : w.file === 'verify.yml' ? 'verify' : w.file === 'dashboard.yml' ? 'dashboard' : w.file.startsWith('telegram-') ? 'telegram' : SETUP_FILES.includes(w.file) ? 'setup' : 'sheet-report-writers');
   /** The GitHub expressions used here, run as JavaScript (`&&` / `||` return operands in both; inputs are lower case). */
   const evalExpr = (expr: string, user: string | null): string => {
     const m = /^\$\{\{ (.*) \}\}$/.exec(expr);
@@ -401,9 +402,9 @@ describe('GENERIC_PLAN P5: per-user workflows (the owner runs exactly as before)
     return String(new Function('u', 'return ' + js)(user));
   };
 
-  test('exactly the twelve files that use per-user secrets take the user input; CI, record, fetch-files and the migration do not', () => {
+  test('exactly the thirteen files that use per-user secrets take the user input (the dashboard too); CI, record, fetch-files and the migration do not', () => {
     assert.deepEqual(WORKFLOWS.filter((w) => w.perUser).map((w) => w.file).sort(), PER_USER);
-    assert.deepEqual(WORKFLOWS.filter((w) => w.readsProfile).map((w) => w.file).sort(), [...SHEET_WRITER_WORKFLOWS.map((w) => w.file), ...SETUP_FILES].sort());
+    assert.deepEqual(WORKFLOWS.filter((w) => w.readsProfile).map((w) => w.file).sort(), [...SHEET_WRITER_WORKFLOWS.map((w) => w.file), ...SETUP_FILES, 'dashboard.yml'].sort());
     for (const w of WORKFLOWS.filter((x) => !x.perUser)) {
       const t = readWorkflow(w.file);
       assert.ok(!t.includes('inputs.user') && !t.includes('SECRET_PREFIX'), w.file);
@@ -631,5 +632,57 @@ describe('Owner 2026-11-06: the set-up buttons (setup-check.yml, init-user-sheet
     const pkg = JSON.parse(fs.readFileSync(path.join(BACKEND_DIR, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
     assert.equal(pkg.scripts['setup-check'], 'node src/setupCheck.ts');
     assert.equal(pkg.scripts['init-user-sheets'], 'node src/initUserSheets.ts');
+  });
+});
+
+describe('Owner 2026-11-06: the phone dashboard (docs/DASHBOARD.md) is published at the end of the report runs', () => {
+  test('the five publishers end with ONE "Publish the dashboard" step: skipped without the Cloudflare secrets, never fails the run', () => {
+    assert.deepEqual([...DASHBOARD_PUBLISHERS].sort(), ['analyze.yml', 'exit-report.yml', 'my-options.yml', 'nightly.yml', 'send-exit.yml']);
+    for (const f of DASHBOARD_PUBLISHERS) {
+      const w = WORKFLOWS.find((x) => x.file === f)!;
+      const t = readWorkflow(f);
+      const steps = stepsOf(t);
+      assert.equal(steps.filter((s) => s.includes(DASHBOARD_PUBLISH_STEP)).length, 1, f + ': one publish step');
+      const step = steps[steps.length - 1] as string;
+      assert.ok(step.includes(DASHBOARD_PUBLISH_STEP), f + ': it is the final step');
+      assert.ok(step.includes('\n        continue-on-error: true\n'), f + ': a failed upload never fails the run');
+      assert.match(step, /\n {8}if: \$\{\{ !cancelled\(\)( && steps\.guard\.outputs\.run == 'true')? \}\}\n/);
+      assert.equal(step.includes("steps.guard.outputs.run == 'true'"), f === 'my-options.yml', 'my-options: only when its guard let the run go');
+      assert.ok(step.includes('if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then') && step.includes('exit 0'), f + ': skipped without the secrets');
+      assert.ok(step.includes(DASHBOARD_PUBLISH_COMMAND) && step.includes('npx --yes ' + WRANGLER + ' pages deploy . --project-name "$project" --branch main'), f);
+      assert.ok(step.indexOf('cd out/dashboard') > step.indexOf(DASHBOARD_PUBLISH_COMMAND), f + ': wrangler runs inside the site folder (it finds functions/ there)');
+      assert.ok(step.includes('project="${DASHBOARD_PROJECT:-' + DASHBOARD_DEFAULT_PROJECT + '}"') && step.includes('DASHBOARD_PROJECT: ${{ vars.DASHBOARD_PROJECT }}'));
+      for (const s of DASHBOARD_SECRETS) { assert.ok(w.secrets.includes(s), f + ' DATA lists ' + s); assert.ok(passesSecret(step, s), f + ': ' + s); }
+      assert.ok(w.commands.includes(DASHBOARD_PUBLISH_COMMAND), f + ' DATA lists the build command');
+      assert.equal(step.includes('GITHUB_TOKEN: ${{ github.token }}'), f === 'nightly.yml', 'only the Nightly (actions: read) asks GitHub for the minutes');
+      assert.doesNotMatch(step, /echo[^\n]*\$(CLOUDFLARE|GOOGLE)/, 'never echoes a secret');
+      assert.ok(!step.includes('npm run lock-sheets'));
+    }
+  });
+  test('wrangler is pinned to one exact release everywhere', () => {
+    assert.match(WRANGLER, /^wrangler@\d+\.\d+\.\d+$/);
+    for (const w of WORKFLOWS) for (const m of readWorkflow(w.file).matchAll(/wrangler@([^\s"']+)/g)) assert.equal('wrangler@' + m[1], WRANGLER, w.file);
+  });
+  test('dashboard.yml: manual only, own group, read-only, profile step then build + upload; makes the project the first time', () => {
+    const t = readWorkflow(DASHBOARD.file);
+    assert.match(t, /^ {2}workflow_dispatch:/m);
+    assert.doesNotMatch(t, /^ {2}(push|pull_request|schedule|workflow_run|repository_dispatch):/m);
+    assert.equal(DASHBOARD.concurrencyGroup, perUserGroup('dashboard'));
+    const main = stepWith(t, DASHBOARD_PUBLISH_COMMAND);
+    assert.ok(!main.includes('continue-on-error'), 'by hand, a failure shows');
+    assert.ok(main.includes('pages project create "$project" --production-branch main'));
+    assert.ok(t.indexOf('npm run profile-fetch') < t.indexOf(DASHBOARD_PUBLISH_COMMAND));
+    assert.deepEqual([...DASHBOARD.secrets].sort(), ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', 'DATA_SPREADSHEET_ID', 'GOOGLE_SERVICE_ACCOUNT_JSON', 'REPORTS_SPREADSHEET_ID', 'SEC_CONTACT_EMAIL', 'SPREADSHEET_ID']);
+  });
+  test('no workflow gained a push or schedule trigger for the dashboard', () => {
+    for (const f of [...DASHBOARD_PUBLISHERS, DASHBOARD.file]) {
+      const w = WORKFLOWS.find((x) => x.file === f)!;
+      assert.equal(/^ {2}schedule:/m.test(readWorkflow(f)), w.crons.length > 0, f);
+      assert.doesNotMatch(readWorkflow(f), /^ {2}push:/m, f);
+    }
+  });
+  test('package.json has dashboard-build', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(BACKEND_DIR, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+    assert.match(pkg.scripts['dashboard-build'] ?? '', /src\/dashboardBuild\.ts$/);
   });
 });

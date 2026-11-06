@@ -89,7 +89,7 @@ Also needed, no account: an email address you read (the SEC asks every program f
 | O3 | Know the roles: a repo under a PERSONAL account has no Read-only role: every collaborator can also push. For Read only, put the core repo in a free GitHub **organization** (Settings → Danger Zone → Transfer ownership) and add the person with role **Read** | so nobody changes the core by mistake | the person's role shows **Read** |
 | O4 | Send the person the core repo link and point them to `docs/PREREQUISITES.md` | — | — |
 | O5 | After they made their copy you may remove their access; their copy keeps working. They need access again to update (USER_MANUAL §12) | least access | — |
-| O6 | Tag each release (`core-v1.0.0`, ...) so people can update to a known version | updates | the tag shows under **Tags** |
+| O6 | Mark each release with a branch `release/vX.Y.Z` (plus the `VERSION` file) so people can update to a known version | updates | the branch shows under **Branches** |
 
 The 3 ways the person gets the program:
 

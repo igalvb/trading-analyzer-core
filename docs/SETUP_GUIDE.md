@@ -248,6 +248,7 @@ Example (made-up tickers: type your own). Profile rows:
 | 8.1 | Anthropic (Claude Opus) | console.anthropic.com → sign up → **Billing** → add credit (prepaid) → **Settings** → **Limits** → set a monthly spend limit (e.g. $10) → **API Keys** → **Create Key** → GitHub secret `ANTHROPIC_API_KEY` | "+ Opus" on /analyze, `/exit opus`, the Opus answer of /verify, Opus in AI Dispatch | Gemini only; nothing breaks |
 | 8.2 | FMP paid | upgrade on the FMP site; the key stays the same | fewer skipped fundamentals on a big list | free limits |
 | 8.3 | GitHub minutes | Settings → Billing → set a spending limit above $0, or a paid plan | more than 2,000 minutes a month | runs stop until the 1st |
+| 8.4 | Phone dashboard (free) | docs/DASHBOARD.md: Cloudflare Pages + Access, secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, then Actions → **Dashboard** → Run workflow | a private page on the phone with every report, search, filters and Run buttons | the runs skip the dashboard step; nothing else changes |
 
 ---
 

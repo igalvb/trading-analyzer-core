@@ -304,6 +304,7 @@ A practice run with play money, decided from the real nightly analysis. Nothing 
 | **Watchdog** | `user` | the run check now (silent when all ✅) |
 | **Verify** | `days` (`3`, 1-7), `user` | = `/verify` with more or fewer days |
 | **Setup Check** | `user` | every key and setting ✅ / ❌ / ➖ with one fix each, on the run's **Summary** page (names only, never values). Run it after any change of a secret or the Profile tab |
+| **Dashboard** | `user` | builds and uploads the phone dashboard now (first publish, or a refresh). The five report runs also do it at their end once it is set up: docs/DASHBOARD.md |
 | **Init user sheets** | `user` | adds a missing `Portfolio`, `🎯 Watchlist` or `💾 Script Properties` tab with its headers; never touches a tab that exists |
 | **Telegram Check** | `user` | find your chat number; test the bot |
 | **Telegram Setup** | `relay_url`, `user` | connect the bot to the relay again (after a new bot token or webhook secret, or a new relay address) |
@@ -350,15 +351,15 @@ Check minutes: github.com → your photo → **Settings** → **Billing and lice
 
 ## 12. Updating to a new core version
 
-The core owner publishes versions as tags (`core-v1.0.0`, `core-v1.1.0`, ...) in the core repo. Your data lives in your sheets and secrets, not in the code, so an update never loses it.
+The core owner publishes versions as release branches (`release/v1.0.0`, `release/v1.1.0`, ...) in the core repo; `main` is always the latest one. Your data lives in your sheets and secrets, not in the code, so an update never loses it.
 
 ### Way A: with a terminal or an AI coding session (keeps your repo)
 
 | Do | You should see | ✅ Check | If it fails |
 |---|---|---|---|
 | `git clone https://github.com/YOU/TradingAnalyzer.git` → `cd TradingAnalyzer` | your files | — | sign in to GitHub when asked |
-| `git remote add core https://github.com/CORE-OWNER/trading-analyzer-core.git` (once) → `git fetch core --tags` | the new tags | `git tag` lists the new version | no access → ask the core owner to invite you again |
-| first update only: `git merge core-vX.Y.Z --allow-unrelated-histories -X theirs -m "Update to core-vX.Y.Z"`. Later updates: `git merge core-vX.Y.Z -m "Update to core-vX.Y.Z"` | "Merge made" | no conflict markers left (`git status` clean) | conflicts on a file you never edited → take the core's: `git checkout --theirs <file>` → `git add <file>` → `git commit` |
+| `git remote add core https://github.com/CORE-OWNER/trading-analyzer-core.git` (once) → `git fetch core` | the new branches | `git branch -r` lists `core/release/vX.Y.Z` | no access → ask the core owner to invite you again |
+| first update only: `git merge core/release/vX.Y.Z --allow-unrelated-histories -X theirs -m "Update to core vX.Y.Z"`. Later updates: `git merge core/release/vX.Y.Z -m "Update to core vX.Y.Z"` | "Merge made" | no conflict markers left (`git status` clean) | conflicts on a file you never edited → take the core's: `git checkout --theirs <file>` → `git add <file>` → `git commit` |
 | `cd backend && npm ci && npm run typecheck && npm test` | 0 errors; 0 failing tests | — | do not push; ask the core owner |
 | `git push` | — | your repo shows the merge commit | — |
 | After the push: Telegram `/help` and Actions → **Watchdog** → Run | answers; green | — | §11 |

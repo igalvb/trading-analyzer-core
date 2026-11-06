@@ -1,0 +1,93 @@
+# Dashboard (docs/DASHBOARD.md): builds the phone dashboard from the tabs the runs wrote (read-only: nothing is written
+# to any sheet, nothing is fetched) and uploads it to your Cloudflare Pages project. Manual only: the first publish, or
+# a refresh. The Nightly, Analyze, Exit Report, Send Exit and My Options runs also publish it at their end, once the
+# two Cloudflare secrets are set. The first run makes the Pages project when it does not exist yet.
+name: Dashboard
+
+on:
+  workflow_dispatch:
+    inputs:
+      user:
+        description: 'User id. owner = you (repo secrets; the built-in profile if this copy has one, else your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
+        type: string
+        default: owner
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ (inputs.user || 'owner') == 'owner' && 'dashboard' || format('dashboard-{0}', inputs.user) }}
+  cancel-in-progress: false
+
+env:
+  TZ: America/New_York
+  LANG: en_US.UTF-8
+  SCRIPT_TIME_ZONE: America/New_York
+  RUN_USER: ${{ inputs.user || 'owner' }}
+  SECRET_PREFIX: ${{ (inputs.user || 'owner') != 'owner' && format('{0}_', inputs.user) || '' }}
+  PROFILE_SOURCE: ${{ (inputs.user || 'owner') != 'owner' && 'sheet' || '' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  dashboard:
+    name: Build and publish the dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies (no dev tools)
+        working-directory: backend
+        run: npm ci --omit=dev --no-audit --no-fund
+
+      - name: Read the user profile tab (not for the default user of a copy with a built-in profile)
+        if: env.PROFILE_SOURCE == 'sheet' || hashFiles('backend/src/owner/profile.ts') == ''
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+        run: |
+          mkdir -p out
+          npm run profile-fetch -- --out "$PWD/out/profile.json"
+          echo "PROFILE_FILE=$PWD/out/profile.json" >> "$GITHUB_ENV"
+
+      - name: Build and publish the dashboard
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          SEC_CONTACT_EMAIL: ${{ secrets[format('{0}SEC_CONTACT_EMAIL', env.SECRET_PREFIX)] }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets[format('{0}CLOUDFLARE_API_TOKEN', env.SECRET_PREFIX)] }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets[format('{0}CLOUDFLARE_ACCOUNT_ID', env.SECRET_PREFIX)] }}
+          DASHBOARD_PROJECT: ${{ vars.DASHBOARD_PROJECT }}
+          WRANGLER_SEND_METRICS: 'false'
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Add the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID first (docs/DASHBOARD.md step B)."
+            exit 1
+          fi
+          project="${DASHBOARD_PROJECT:-trading-dashboard}"
+          [ "$RUN_USER" = "owner" ] || project="$project-$RUN_USER"
+          npm run dashboard-build -- --out out/dashboard
+          cd out/dashboard
+          # The first time: make the Pages project (an existing one answers "already exists"; that is fine).
+          npx --yes wrangler@3.99.0 pages project create "$project" --production-branch main >/dev/null 2>&1 || true
+          npx --yes wrangler@3.99.0 pages deploy . --project-name "$project" --branch main --commit-dirty=true
+          {
+            echo "### Dashboard published"
+            echo
+            echo "Project: $project. Open https://$project.pages.dev on your phone (behind Cloudflare Access once step D is done)."
+          } >> "$GITHUB_STEP_SUMMARY"

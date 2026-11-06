@@ -158,3 +158,29 @@ jobs:
           echo "- Log lines: $(count CRITICAL) critical, $(count ERROR) error, $(count WARNING) warning" >> "$GITHUB_STEP_SUMMARY"
           echo "::error::My Options refresh did not finish cleanly. Download the my-options-log artifact."
           echo "### My Options run FAILED" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the dashboard (only when the Cloudflare secrets are set; docs/DASHBOARD.md)
+        if: ${{ !cancelled() && steps.guard.outputs.run == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          SEC_CONTACT_EMAIL: ${{ secrets[format('{0}SEC_CONTACT_EMAIL', env.SECRET_PREFIX)] }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets[format('{0}CLOUDFLARE_API_TOKEN', env.SECRET_PREFIX)] }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets[format('{0}CLOUDFLARE_ACCOUNT_ID', env.SECRET_PREFIX)] }}
+          DASHBOARD_PROJECT: ${{ vars.DASHBOARD_PROJECT }}
+          WRANGLER_SEND_METRICS: 'false'
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "Dashboard not set up (no Cloudflare secrets); skipped."
+            exit 0
+          fi
+          project="${DASHBOARD_PROJECT:-trading-dashboard}"
+          [ "$RUN_USER" = "owner" ] || project="$project-$RUN_USER"
+          npm run dashboard-build -- --out out/dashboard
+          cd out/dashboard
+          npx --yes wrangler@3.99.0 pages deploy . --project-name "$project" --branch main --commit-dirty=true

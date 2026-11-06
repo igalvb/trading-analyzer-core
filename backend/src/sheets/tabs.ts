@@ -135,8 +135,10 @@ export const OPS_REPORT_TABS: readonly string[] = ['🩺 Run Health'];
 /**
  * The paper test's input tabs in the reports sheet: '🤖 Claude Picks' holds the orders of the account "🤖 Claude, free
  * choice" (paper/paperClaude.ts CLAUDE_PICKS_TAB; appended by `npm run claude-order`, Status written by the paper night).
+ * '🤖 Claude Ideas' is Claude's recommendations list with no money (paper/claudeIdeas.ts CLAUDE_IDEAS_TAB; appended by
+ * `npm run claude-idea`, Status edited by hand; shown in the dashboard's Paper tab).
  */
-export const PAPER_INPUT_TABS: readonly string[] = ['🤖 Claude Picks'];
+export const PAPER_INPUT_TABS: readonly string[] = ['🤖 Claude Picks', '🤖 Claude Ideas'];
 
 /** Manual-only and legacy-only report tabs. */
 export const OTHER_REPORT_TABS: readonly string[] = ['📌 Position', '📖 Methodology', '📤 Exit Strategy', '🔍 Sheet Size Report'];

@@ -10,6 +10,28 @@ The shared core's releases. Version numbers are MAJOR.MINOR.PATCH (the `VERSION`
 
 Each release: a section `## vX.Y.Z (date)` with Added / Changed / Fixed / Action needed (MAJOR only).
 
+## v1.1.0 (2026-11-06)
+
+MINOR: a new, optional feature. Nothing to do unless you want it.
+
+### Added
+
+- The phone dashboard (docs/DASHBOARD.md): a private page on your own Cloudflare Pages (free), behind a Cloudflare
+  Access sign-in. Overview, Portfolio (every holding, crypto included, grouped with totals), Exit, Buy, Paper test
+  (every account, its holdings and full trade log, the weekly reports, top 5 against the yardsticks), History (sold
+  and closed positions, totals and tax per year), Analyze, Options, Models, Runs, Actions, Settings; one search over
+  everything; filters and sorting that are remembered. Buttons start Analyze (free or + Opus), Exit report (+ Opus),
+  Nightly, My Options and Setup Check. Add it to the phone's home screen to open it like an app.
+- `npm run dashboard-build` (`backend/src/dashboard/`, `backend/dashboard/`): reads the tabs the runs wrote, writes
+  the site folder. No fetch, no sheet write, no key or sheet id in the data.
+- Workflow **Dashboard** (manual) and a final step "Publish the dashboard" in Nightly, Analyze, Exit Report, Send Exit
+  and My Options. It runs only when the new optional secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are
+  set (skipped otherwise) and never fails a run. No new schedule or push trigger.
+
+### Action needed
+
+- None. To use the dashboard: docs/DASHBOARD.md (about 20 minutes, once).
+
 ## v1.0.0 (2026-11-06)
 
 The first versioned core. Everything below is in it.

@@ -244,3 +244,15 @@ describe('paper weekly — sending', () => {
     assert.equal(await maybeSendPaperWeekly({ ...base, store: new MemoryTabStore(), toPdf: async () => {} }), 'no-data', 'no paper tabs yet');
   });
 });
+
+test('fix 2026-11-06: trades logged under a part of an account count for that account', async () => {
+  const { buildWeekly } = await import('../src/reports/paperWeekly.ts');
+  const values = [
+    { day: '2026-11-02', account: 'Everything together (17 stocks + LEAPS, 3 positions)', group: 'D', value: 100000, holds: '' },
+    { day: '2026-11-06', account: 'Everything together (17 stocks + LEAPS, 3 positions)', group: 'D', value: 101000, holds: '' },
+  ];
+  const log = [{ day: '2026-11-03', when: 'filled', account: 'Everything together, shares half', action: 'BOUGHT', stock: 'AAPL', qty: '1', price: '1', value: '1', tax: '', why: '' }];
+  const w = buildWeekly(values, log, { monday: '2026-11-02', friday: '2026-11-06' } as never)!;
+  const a = w.accounts.find((x) => x.account.startsWith('Everything together'))!;
+  assert.equal(a.buys, 1);
+});
