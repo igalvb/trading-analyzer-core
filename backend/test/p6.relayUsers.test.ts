@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 // @ts-ignore -- plain JavaScript (pasted into Cloudflare as is)
-import relay, { RELAY_VERSION, VERIFY_REPLY, OWNER_USER, inputsFor, repoOf, tickersOf, userOfChat, usersOf } from '../../relay/telegram-relay.worker.mjs';
+import relay, { RELAY_VERSION, OWNER_USER, inputsFor, repoOf, tickersOf, userOfChat, usersOf } from '../../relay/telegram-relay.worker.mjs';
 import { RUN_USER_RE, OWNER_USER as BACKEND_OWNER } from '../src/profile/runUser.ts';
 import { OWNER_USER as WORKFLOW_OWNER, USER_INPUT } from '../src/workflows/schedule.ts';
 
@@ -82,31 +82,18 @@ describe('P6 relay: the owner, unchanged', () => {
   });
 });
 
-describe('Owner 2026-11-04: /verify (alias /check) starts verify.yml', () => {
-  test('the owner: days 3, no user key; u2: with user; the reply; an unknown chat starts nothing; in the help text', async () => {
-    assert.ok(RELAY_VERSION >= '2026-11-04.1');
+describe('Owner 2026-11-06: /verify removed', () => {
+  test('/verify and /check start nothing and get the help text, which no longer lists them', async () => {
+    assert.ok(RELAY_VERSION >= '2026-11-06.2');
     const env = { ...BASE, USERS };
     await withFetch(async (seen) => {
       await post(env, { message: { chat: { id: 42 }, text: '/verify' } });
       await post(env, { message: { chat: { id: 77 }, text: '/check' } });
-      await post(env, { message: { chat: { id: 99 }, text: '/verify' } });
-      const d = dispatches(seen);
-      assert.equal(d.length, 2);
-      assert.ok(d.every((c) => c.url.endsWith('/actions/workflows/verify.yml/dispatches')));
-      assert.deepEqual(d[0]!.body, { ref: 'main', inputs: { days: '3' } });
-      assert.deepEqual(d[1]!.body, { ref: 'main', inputs: { days: '3', user: 'u2' } });
+      assert.equal(dispatches(seen).length, 0);
       const replies = seen.filter((c) => c.url.endsWith('sendMessage'));
-      assert.deepEqual(replies.map((c) => [c.body.chat_id, c.body.text]), [['42', VERIFY_REPLY], ['77', VERIFY_REPLY]]);
-      assert.equal(VERIFY_REPLY, '🩺 Verifying the last 3 days… about 2 min.');
-      seen.length = 0;
-      await post(env, { message: { chat: { id: 42 }, text: '/help' } });
-      assert.match(String(seen[0]!.body.text), /\/verify \(or \/check\)/);
+      assert.equal(replies.length, 2);
+      for (const r of replies) assert.doesNotMatch(String(r.body.text), /\/verify/);
     });
-    await withFetch(async (seen) => {
-      await post(BASE, { message: { chat: { id: 42 }, text: '/verify' } });
-      const r = seen.filter((c) => c.url.endsWith('sendMessage'));
-      assert.match(String(r[0]!.body.text), /Could not start it\. GitHub said 401 \(Bad credentials\)/);
-    }, () => 401);
   });
 });
 

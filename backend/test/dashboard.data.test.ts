@@ -207,7 +207,7 @@ describe('dashboard data', () => {
     const d = buildDashboard({}, CTX);
     assert.equal(d.schema, DASHBOARD_SCHEMA);
     assert.equal(d.asOfText, 'Thu 5 Nov 2026, 23:40 NY');
-    assert.deepEqual(d.missing, ['portfolio', 'exit', 'buy', 'history', 'paper', 'ideas', 'options', 'models', 'decisions', 'runs']);
+    assert.deepEqual(d.missing, ['portfolio', 'exit', 'buy', 'history', 'paper', 'ideas', 'options', 'models', 'decisions', 'runs', 'networth', 'growth']);
     assert.equal(d.user.taxRate, 0.25);
     const junk = buildDashboard({ portfolio: [[null as never, {} as never]], exitReport: [['x']], paperValues: [['nope']], runHealth: [[1, 2, 3]], optionsReads: [['?']] }, CTX);
     assert.ok(junk.missing.includes('portfolio') && junk.missing.includes('paper'));

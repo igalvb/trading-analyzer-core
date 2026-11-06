@@ -3,7 +3,7 @@
  * generated), the data file, and two app icons drawn here as PNG (iOS "Add to Home Screen" wants a PNG touch icon).
  *
  *   <out>/index.html, manifest.webmanifest, icon.svg, _headers   copied from backend/dashboard/
- *   <out>/functions/api/run.js                                   copied (the Cloudflare Pages Function: Run buttons)
+ *   <out>/functions/api/run.js, edit.js                          copied (the Cloudflare Pages Functions: Run buttons, ledger edits)
  *   <out>/data/dashboard.json                                    the data (dashboard/data.ts)
  *   <out>/apple-touch-icon.png (180 px), icon-512.png             drawn by iconPng
  *
@@ -17,7 +17,7 @@ import zlib from 'node:zlib';
 /** The app shell folder, relative to backend/. */
 export const APP_DIR = path.resolve(import.meta.dirname, '..', '..', 'dashboard');
 /** The files copied from APP_DIR (paths relative to it). */
-export const APP_FILES: readonly string[] = ['index.html', 'manifest.webmanifest', 'icon.svg', '_headers', 'functions/api/run.js'];
+export const APP_FILES: readonly string[] = ['index.html', 'manifest.webmanifest', 'icon.svg', 'sw.js', '_headers', 'functions/api/run.js', 'functions/api/edit.js'];
 export const DATA_FILE = 'data/dashboard.json';
 
 const crcTable = ((): Uint32Array => {
@@ -73,6 +73,7 @@ export function writeSite(outDir: string, dataJson: string, appDir: string = APP
   for (const f of APP_FILES) put(f, fs.readFileSync(path.join(appDir, f)));
   put(DATA_FILE, dataJson);
   put('apple-touch-icon.png', iconPng(180));
+  put('icon-192.png', iconPng(192));
   put('icon-512.png', iconPng(512));
   return written;
 }

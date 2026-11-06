@@ -82,9 +82,8 @@ describe('FL-13d — Telegram commands', () => {
     assert.deepEqual(parseCommand('/exit opus'), { kind: 'exit', opus: true });
     assert.deepEqual(parseCommand('/exit now'), { kind: 'exit' });
     assert.deepEqual(parseCommand('hello'), { kind: 'help' });
-    assert.deepEqual(parseCommand('/verify'), { kind: 'verify' });
-    assert.deepEqual(parseCommand('/check'), { kind: 'verify' }, '/check is an alias');
-    assert.deepEqual(parseCommand('/Verify@MyBot'), { kind: 'verify' });
+    assert.deepEqual(parseCommand('/verify'), { kind: 'help' }, 'owner 2026-11-06: /verify removed');
+    assert.deepEqual(parseCommand('/check'), { kind: 'help' });
   });
 
   test('relay: wrong secret or another chat starts nothing; the owner\'s /analyze starts analyze.yml', async () => {

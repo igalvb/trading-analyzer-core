@@ -66,6 +66,10 @@ function stepWith(text: string, needle: string): string {
   assert.ok(s, 'no step contains: ' + needle);
   return s;
 }
+/** The workflow up to its second job, if any (the Nightly's `ledger` job). */
+function mainJob(text: string): string {
+  return text.split(/^ {2}ledger:$/m)[0] as string;
+}
 function parseInputs(text: string): Array<{ name: string; type: string; default: string }> {
   const lines = text.split('\n');
   const start = lines.findIndex((l) => l === '    inputs:');
@@ -124,6 +128,20 @@ describe('FL-8w (a) every workflow file has a sane YAML shape', () => {
     assert.match(t, /^ {2}workflow_dispatch:/m);
     assert.doesNotMatch(t, /^ {2}push:/m);
     assert.doesNotMatch(t, /^ {2}pull_request:/m);
+  });
+  test('nightly.yml: write access only in the ledger job, only to the data branch, only after a changed snapshot (docs/LEDGER.md)', () => {
+    const t = readWorkflow('nightly.yml');
+    const [main, ledger] = [mainJob(t), t.slice(mainJob(t).length)];
+    assert.match(main, /^permissions:\n {2}contents: read\n {2}actions: read$/m, 'the pipeline job stays read-only');
+    assert.doesNotMatch(main, /contents: write|git push/, 'no write in the pipeline job');
+    assert.match(ledger, /^ {2}ledger:\n {4}name: .*\n {4}needs: nightly\n {4}if: \$\{\{ !cancelled\(\) && needs\.nightly\.outputs\.ledger == 'yes' \}\}\n/m);
+    assert.match(ledger, /^ {4}permissions:\n {6}contents: write$/m);
+    assert.equal(ledger.split('\n').filter((l) => /\bgit\b.*\bpush\b/.test(l)).length, 1, 'exactly one git push');
+    assert.ok(ledger.includes('git push -q origin HEAD:data') && !/origin (HEAD:)?main\b/.test(t), 'only the data branch, never main');
+    assert.ok(ledger.includes('git add ledger/snapshots.jsonl'), 'only the snapshot file is committed');
+    assert.match(stepWith(main, 'Keep the ledger snapshot'), /git -C data-branch status --porcelain -- ledger\/snapshots\.jsonl/);
+    assert.match(main, /ref: data\n {10}path: data-branch/);
+    assert.doesNotMatch(t, /^ {2}(push|pull_request|schedule):/m, 'no new trigger');
   });
   test('long-history.yml is manual only (docs/LONG_HISTORY_PLAN.md: no schedule, no push trigger)', () => {
     const t = readWorkflow('long-history.yml');
@@ -641,7 +659,8 @@ describe('Owner 2026-11-06: the phone dashboard (docs/DASHBOARD.md) is published
     for (const f of DASHBOARD_PUBLISHERS) {
       const w = WORKFLOWS.find((x) => x.file === f)!;
       const t = readWorkflow(f);
-      const steps = stepsOf(t);
+      // The Nightly's second job (the ledger commit, docs/LEDGER.md) comes after; the publish step ends the main job.
+      const steps = stepsOf(mainJob(t));
       assert.equal(steps.filter((s) => s.includes(DASHBOARD_PUBLISH_STEP)).length, 1, f + ': one publish step');
       const step = steps[steps.length - 1] as string;
       assert.ok(step.includes(DASHBOARD_PUBLISH_STEP), f + ': it is the final step');

@@ -27,6 +27,8 @@ export const ALLOWED_ACTIONS: readonly string[] = [
   'actions/checkout@v5',
   'actions/setup-node@v5',
   'actions/upload-artifact@v5',
+  // docs/LEDGER.md: the Nightly's ledger job takes the run's snapshot file over to the data branch.
+  'actions/download-artifact@v5',
 ];
 
 /** Relative to backend/. The first folder that holds nightly.yml is used. */

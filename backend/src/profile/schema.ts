@@ -103,6 +103,20 @@ export interface Profile {
    * stored; C-1 gates any snapshot at 2 trading days. Default false: the read stays in shadow.
    */
   readonly options: { readonly applied: boolean };
+  /**
+   * Leaving Google Sheets (owner 2026-11-06, docs/LEDGER.md): where the runs read the holdings. 'off' = the Portfolio
+   * sheet only (today); 'shadow' = the sheet, and the Nightly also reads the ledger on the `data` branch, logs the
+   * differences and appends the day's snapshot; 'on' = the ledger only (the sheet is not read for holdings).
+   * Default 'off'. Revert = set it back.
+   */
+  readonly storage: { readonly ledger: LedgerMode };
+  /**
+   * The ledger's own price sources (docs/LEDGER.md "Crypto prices"). `cryptoPrices` 'on' = when storage.ledger is
+   * shadow / on, the Nightly prices the ledger's crypto for the day's snapshot from cryptoprices.cc
+   * (ledger/cryptoPrices.ts; a coin it cannot price keeps its manualPrice); holdings.json is not rewritten.
+   * Default 'off' (no fetch at all). Revert = set it back.
+   */
+  readonly ledger: { readonly cryptoPrices: CryptoPricesMode };
   /** Absent = no live bot (the default for every user but the owner, open question Q5). */
   readonly live: LiveProfile | null;
   /** The results pack name (P4); null = "no history for your list yet". */
@@ -124,9 +138,16 @@ export const PROFILE_KEYS: readonly string[] = [
   'features.paper', 'features.liveBot', 'features.myOptions', 'features.ai',
   'exit.weeklyStops',
   'options.applied',
+  'storage.ledger',
+  'ledger.cryptoPrices',
   'live.follow', 'live.startValue', 'live.fractional', 'live.minTrade', 'live.maxOrders', 'live.capSlack', 'live.targetMode', 'live.alertFalls', 'live.allowList',
   'results',
 ];
+
+export const LEDGER_MODES = ['off', 'shadow', 'on'] as const;
+export type LedgerMode = (typeof LEDGER_MODES)[number];
+export const CRYPTO_PRICES_MODES = ['off', 'on'] as const;
+export type CryptoPricesMode = (typeof CRYPTO_PRICES_MODES)[number];
 
 export const MAX_CORE_TICKERS = 30;
 export const MAX_TAX_RATE = 0.6;
@@ -253,6 +274,12 @@ export function validateProfile(input: unknown): ProfileResult {
 
   const exit = { weeklyStops: bool('exit.weeklyStops', false) };
   const options = { applied: bool('options.applied', false) };
+  const ledgerMode = str('storage.ledger', false) ?? 'off';
+  if (!(LEDGER_MODES as readonly string[]).includes(ledgerMode)) errors.push('storage.ledger must be one of ' + LEDGER_MODES.join(', '));
+  const storage = { ledger: (LEDGER_MODES as readonly string[]).includes(ledgerMode) ? ledgerMode as LedgerMode : 'off' };
+  const cryptoMode = str('ledger.cryptoPrices', false) ?? 'off';
+  if (!(CRYPTO_PRICES_MODES as readonly string[]).includes(cryptoMode)) errors.push('ledger.cryptoPrices must be one of ' + CRYPTO_PRICES_MODES.join(', '));
+  const ledger = { cryptoPrices: (CRYPTO_PRICES_MODES as readonly string[]).includes(cryptoMode) ? cryptoMode as CryptoPricesMode : 'off' };
   const features = { paper: bool('features.paper', true), liveBot: bool('features.liveBot', false), myOptions: bool('features.myOptions', true), ai: bool('features.ai', false) };
 
   let live: LiveProfile | null = null;
@@ -283,7 +310,7 @@ export function validateProfile(input: unknown): ProfileResult {
       version, user: { id, timeZone }, lists: { core, researchCore, pickers, watchlistSeed },
       paper: { start, end, fixedUniverse }, research: { testAUniverse, universe, extraTickers }, models: { pairs }, tax: { rate },
       benchmarks: { index }, labels: { listName, holdResearchCore, holdCore, researchName },
-      sheets: { protectedTabs, portfolio: { headerAliases, endMarkers, assumedPurchaseDate } }, features, exit, options, live, results,
+      sheets: { protectedTabs, portfolio: { headerAliases, endMarkers, assumedPurchaseDate } }, features, exit, options, storage, ledger, live, results,
     },
   };
 }
