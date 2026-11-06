@@ -1,0 +1,26 @@
+{
+  "note": "The shared core (+) and the private overlay (-). The last rule that matches a path decides; a path no rule matches is overlay. Every core file is byte-identical in the core repo and in every copy with an overlay (backend/scripts/coreManifest.ts, CORE_README.md).",
+  "rules": [
+    "+ .gitattributes",
+    "+ .gitignore",
+    "+ .nvmrc",
+    "+ core-manifest.json",
+    "+ VERSION",
+    "+ CHANGELOG.md",
+    "+ CORE_README.md",
+    "+ CONTRIBUTING.md",
+    "+ .github/pull_request_template.md",
+    "+ .github/workflows/*.yml",
+    "+ relay/telegram-relay.worker.mjs",
+    "+ docs/{SETUP_GUIDE,PREREQUISITES,USER_MANUAL}.md",
+    "+ backend/**",
+    "- backend/README.md",
+    "- backend/.github/**",
+    "- backend/src/owner/**",
+    "- backend/test/overlay/**",
+    "- backend/test/recordings/**",
+    "- backend/scripts/{golden,ownerRelay}.ts",
+    "- backend/legacy/historical_data/*.json",
+    "+ backend/legacy/historical_data/{AMD,AQZA,AQZB,BITB,BQZA,BTC,CQZA,CQZB,DECK,FBTC,GBTC,GOOGL,HQZA,IBIT,JNJ,JPM,KO,MQZA,MQZB,MQZC,MSTR,NVDA,PLTR,POOL,QQQ,SMH,SPY,SQZB,TSLA,UQZA,_VIX}.json"
+  ]
+}

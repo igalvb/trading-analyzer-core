@@ -31,6 +31,7 @@
     "init-user-sheets": "node src/initUserSheets.ts",
     "telegram-setup": "node src/telegramSetup.ts",
     "analyze-report": "TZ=America/New_York node --env-file-if-exists=.env src/analyzeReport.ts",
+    "paper-weekly": "TZ=America/New_York node --env-file-if-exists=.env src/paperWeekly.ts",
     "exit-report-pdf": "TZ=America/New_York node --env-file-if-exists=.env src/exitReportPdf.ts",
     "send-exit": "TZ=America/New_York node --env-file-if-exists=.env src/sendExit.ts",
     "lock-sheets": "node --env-file-if-exists=.env src/lockSheets.ts",
@@ -39,8 +40,11 @@
     "long-history": "node src/longHistory.ts",
     "unlock-sheets": "node --env-file-if-exists=.env src/lockSheets.ts --unlock",
     "live-fee-report": "TZ=America/New_York node --env-file-if-exists=.env src/live/feeReportCli.ts",
+    "export-core": "node scripts/exportCore.ts",
+    "import-core": "node scripts/importCore.ts",
     "watchdog": "node --env-file-if-exists=.env src/watchdog.ts",
-    "ops-verify": "node --env-file-if-exists=.env src/verify.ts"
+    "ops-verify": "node --env-file-if-exists=.env src/verify.ts",
+    "claude-order": "node --env-file-if-exists=.env src/claudeOrder.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

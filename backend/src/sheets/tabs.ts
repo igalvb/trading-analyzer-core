@@ -101,7 +101,7 @@ export const MIGRATION_MARKER_TAB = '💾 Migration';
  * Data tabs that do not start with '💾 '. The two option-history tabs are paper/chainSnapshot.ts's (James's models, G3);
  * the three options-read tabs are storage/optionsReadsTab.ts's (options sentiment plan A-3 and part B).
  */
-export const OPTIONS_READ_TABS: readonly string[] = ['📈 Options Reads', '📦 Options Read Snapshots', '🌐 Market Options Read'];
+export const OPTIONS_READ_TABS: readonly string[] = ['📈 Options Reads', '📦 Options Read Snapshots', '🌐 Market Options Read', '📐 Options Measures'];
 export const DATA_TABS_WITHOUT_PREFIX: readonly string[] = ['_OPTIONS_SNAPSHOT', '🔬 Log', '📝 Paper State', '📉 IV History', '📦 Option Chain Snapshots', ...OPTIONS_READ_TABS];
 
 /**
@@ -132,6 +132,12 @@ export const LIVE_REPORT_TABS: readonly string[] = ['💵 Live Log'];
 /** The daily run watchdog's append-only log (src/watchdog.ts RUN_HEALTH_TAB; owner 2026-11-04). */
 export const OPS_REPORT_TABS: readonly string[] = ['🩺 Run Health'];
 
+/**
+ * The paper test's input tabs in the reports sheet: '🤖 Claude Picks' holds the orders of the account "🤖 Claude, free
+ * choice" (paper/paperClaude.ts CLAUDE_PICKS_TAB; appended by `npm run claude-order`, Status written by the paper night).
+ */
+export const PAPER_INPUT_TABS: readonly string[] = ['🤖 Claude Picks'];
+
 /** Manual-only and legacy-only report tabs. */
 export const OTHER_REPORT_TABS: readonly string[] = ['📌 Position', '📖 Methodology', '📤 Exit Strategy', '🔍 Sheet Size Report'];
 
@@ -146,7 +152,7 @@ const PER_TICKER_REPORT_PATTERNS: readonly RegExp[] = [/^📋 Bottom Line — .+
 export const PROTECTED_TABS: readonly string[] = [
   MIGRATION_MARKER_TAB, '💾 Script Properties', '📝 Paper State', '📈 Decision History', 'Exit Target History',
   '📝 Paper Trading', '📒 Paper Log', '🔎 Paper Reads', '📈 Paper Values', '📉 IV History', '📦 Option Chain Snapshots',
-  ...OPTIONS_READ_TABS, ...LIVE_REPORT_TABS, ...OPS_REPORT_TABS,
+  ...OPTIONS_READ_TABS, ...LIVE_REPORT_TABS, ...OPS_REPORT_TABS, ...PAPER_INPUT_TABS,
 ];
 
 export function isPersonalTab(name: string): boolean {
@@ -162,7 +168,7 @@ export function sheetFor(name: string): SheetRole {
 
 /** A known report name (the registry), as opposed to an unknown tab that merely routes to reports by default. */
 export function isReportRegistryName(name: string): boolean {
-  return MOVED_REPORT_TABS.includes(name) || ANALYSIS_REPORT_TABS.includes(name) || OTHER_REPORT_TABS.includes(name) || LIVE_REPORT_TABS.includes(name) || OPS_REPORT_TABS.includes(name)
+  return MOVED_REPORT_TABS.includes(name) || ANALYSIS_REPORT_TABS.includes(name) || OTHER_REPORT_TABS.includes(name) || LIVE_REPORT_TABS.includes(name) || OPS_REPORT_TABS.includes(name) || PAPER_INPUT_TABS.includes(name)
     || PER_TICKER_REPORT_PATTERNS.some((re) => re.test(name));
 }
 

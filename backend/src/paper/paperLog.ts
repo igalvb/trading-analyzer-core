@@ -15,10 +15,11 @@ import type { PriceSeries } from '../backtest/data.ts';
 import { trendSeries } from '../analysis/models/trendFollow.ts';
 import { wyckoffClassicSeries } from '../analysis/models/wyckoffClassic.ts';
 import { STRATEGIES, STRATEGY_LABEL, heldList, pctOf, type PaperState, type PaperTrade } from './paperTrading.ts';
-import { PAPER_OWNER_LIST, LAB_SETUPS, LAB_LABEL, LILO_ID, LEAPS_IDS, ALL_ID, ALL_SHARES, JAMES_SHARE_SETUPS, JAMES_IDS, JAMES_LILO_V2_ID, JAMES_GROUP, JAMES_LEAPS_IDS, JAMES_LEAPS_GROUP, labHeld, labAccount, type LabSetup } from './paperLab.ts';
+import { PAPER_OWNER_LIST, LAB_SETUPS, LAB_LABEL, LILO_ID, LEAPS_IDS, ALL_ID, ALL_SHARES, JAMES_SHARE_SETUPS, JAMES_IDS, JAMES_LILO_V2_ID, JAMES_GROUP, JAMES_LEAPS_IDS, JAMES_LEAPS_GROUP, OPTIONS_OFF_SETUPS, labHeld, labAccount, type LabSetup } from './paperLab.ts';
 import { layersAt, layerOf, bandWords } from '../analysis/models/liloLayers.ts';
 import { LILO_V2_CHOSEN } from '../research/liloV2Book.ts';
 import { LABELS } from '../profile/labels.ts';
+import { CLAUDE_ID, CLAUDE_GROUP } from './paperClaude.ts';
 
 export const LOG_TAB = '📒 Paper Log';
 export const READS_TAB = '🔎 Paper Reads';
@@ -86,7 +87,7 @@ const NAME: Readonly<Record<string, string>> = { schabacker: 'Schabacker', edwar
 /** Why a research account buys, in words. */
 function buyWhy(st: LabSetup): string {
   switch (st.model) {
-    case 'engine': return 'the engine says buy (conviction 70+ or buy now)';
+    case 'engine': return 'the engine says buy (conviction 70+ or buy now)' + (st.optionsOff ? ', scored with options off' : '');
     case 'current': return 'the engine says buy and the 5 models do not disagree';
     case 'combo': return '2 of Turtle, Schabacker, Edwards & Magee read bullish';
     case 'best': return 'the engine says buy, or 2 of Turtle, Schabacker, Edwards & Magee read bullish';
@@ -115,7 +116,7 @@ export function logRows(state: PaperState, day: string, trades: readonly PaperTr
   }
   const lab = state.lab;
   if (lab) {
-    for (const st of [...LAB_SETUPS, ALL_SHARES, ...JAMES_SHARE_SETUPS]) {
+    for (const st of [...LAB_SETUPS, ALL_SHARES, ...JAMES_SHARE_SETUPS, ...OPTIONS_OFF_SETUPS]) {
       const a = labAccount(lab, st.id);
       if (!a) continue;
       const pt = st.profitTaking ? '; then James\'s ' + st.profitTaking + ' schedule sells in steps at its layers 6-10' : '';
@@ -153,6 +154,8 @@ export function logRows(state: PaperState, day: string, trades: readonly PaperTr
     }
     for (const [id, a] of Object.entries(lab.leaps ?? {})) for (const t of a.shareSells ?? []) decided(id, 'WILL SELL', t + ' (exercised shares)', a.shares?.[t]?.shares ?? '', 'the 200-day trend broke');
     for (const [id, a] of Object.entries(lab.leaps ?? {})) for (const o of a.orders) if (o.nights === 0) decided(id, o.side === 'BUY' ? 'WILL BUY' : 'WILL SELL', o.ticker + ' $' + o.strike + ' call ' + new Date(o.expUnix * 1000).toISOString().slice(0, 10), o.contracts, o.why);
+    // 🤖 Claude, free choice: tonight's rejected orders and call orders waiting for a quote (its fills are above, with the Reason)
+    for (const x of lab.claude?.notes ?? []) if (x.day === day) rows.push([day, x.action === 'WAITING' ? 'waiting for a quote' : 'not filled', labelOf(CLAUDE_ID), x.action, x.ticker, x.qty, '', '', '', x.why, ctx(x.ticker)]);
     for (const [t, l] of Object.entries(lab.lilo?.lines ?? {})) if (l.age === 0 && !l.funded) decided(LILO_ID, 'LADDER PLACED', t, l.buyRungs.reduce((s, r) => s + r.shares, 0), 'buy rungs ' + l.buyRungs.map((r) => '$' + r.price.toFixed(2)).join(', ') + '; targets ' + l.sellRungs.map((r) => '$' + r.price.toFixed(2)).join(', ') + '; stop ' + (l.stop != null ? '$' + l.stop.toFixed(2) : '—'));
   }
   return rows;
@@ -175,12 +178,13 @@ export function valuesRows(state: PaperState, day: string): TabCell[][] {
   const add = (id: string, name: string, group: string, holds: string): void => { const v = m.values[id]; if (v != null) rows.push([day, name, group, Math.round(v), pctOf(v), holds]); };
   for (const id of STRATEGIES) add(id, STRATEGY_LABEL[id], 'A original', heldList(state, id).join(', ') || 'cash');
   const lab = state.lab;
-  for (const st of LAB_SETUPS) add(st.id, st.label, 'B your list', lab ? labHeld(lab, st.id).join(', ') || 'cash' : '');
+  for (const st of [...LAB_SETUPS, ...OPTIONS_OFF_SETUPS]) add(st.id, st.label, 'B your list', lab ? labHeld(lab, st.id).join(', ') || 'cash' : '');
   add(LILO_ID, LAB_LABEL[LILO_ID] as string, 'B your list', lab ? labHeld(lab, LILO_ID).join(', ') || 'cash' : '');
   for (const id of LEAPS_IDS) add(id, LAB_LABEL[id] as string, 'C LEAPS', lab ? labHeld(lab, id).join(', ') || 'cash' : '');
   add(ALL_ID, LAB_LABEL[ALL_ID] as string, 'D everything', lab ? labHeld(lab, ALL_ID).join(', ') || 'cash' : '');
   for (const id of JAMES_IDS) add(id, LAB_LABEL[id] as string, JAMES_GROUP, lab ? labHeld(lab, id).join(', ') || 'cash' : '');
   for (const id of JAMES_LEAPS_IDS) add(id, LAB_LABEL[id] as string, JAMES_LEAPS_GROUP, lab ? labHeld(lab, id).join(', ') || 'cash' : '');
+  add(CLAUDE_ID, LAB_LABEL[CLAUDE_ID] as string, CLAUDE_GROUP, lab ? labHeld(lab, CLAUDE_ID).join(', ') || 'cash' : '');
   add('qqq', 'Hold QQQ', '📊 yardstick', 'QQQ');
   add('lab.list14', LABELS.holdResearchCore, '📊 yardstick', '');
   add('lab.list', LABELS.holdCoreShort, '📊 yardstick', '');

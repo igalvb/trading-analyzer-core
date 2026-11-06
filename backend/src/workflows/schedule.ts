@@ -61,7 +61,8 @@ export interface WorkflowSpec {
 // ---- GENERIC_PLAN P5: one workflow, many users ----------------------------------------
 //
 // The owner is user `owner` (the default). An empty or `owner` user runs EXACTLY as before: the same concurrency
-// group, the repo secrets under their plain names, the built-in profile (no extra sheet request). Another user `u2`
+// group, the repo secrets under their plain names, the built-in profile when the copy has one (no extra sheet
+// request; a copy without one reads the default user's Profile tab, PROFILE_STEP_IF). Another user `u2`
 // reads the secrets named `U2_<NAME>` (repo secrets with a prefix: works on every GitHub plan; GitHub Environments
 // are not used, they could not be verified on this private Free repo), its own concurrency group, and its own
 // `⚙️ Profile` tab (npm run profile-fetch, before the main step). A missing `U2_` secret is EMPTY, never the
@@ -77,8 +78,12 @@ const NOT_OWNER = "(inputs.user || '" + OWNER_USER + "') != '" + OWNER_USER + "'
 export const PER_USER_ENV: ReadonlyArray<readonly [string, string]> = [
   ['RUN_USER', "${{ inputs.user || '" + OWNER_USER + "' }}"],
   ['SECRET_PREFIX', '${{ ' + NOT_OWNER + " && format('{0}_', inputs.user) || '' }}"],
-  ['PROFILE_SOURCE', 'sheet'], // core: every user, the default one too, reads its Profile tab (no built-in profile)
+  ['PROFILE_SOURCE', '${{ ' + NOT_OWNER + " && 'sheet' || '' }}"],
 ];
+/** The `if:` of the step that reads the Profile tab (npm run profile-fetch): every other user, and the default user of
+ *  a copy WITHOUT a built-in profile (src/overlay.ts; `hashFiles` is '' when the file is missing). A copy with one
+ *  (the owner's) skips it for the default user: no extra sheet request, runs as before. */
+export const PROFILE_STEP_IF = "env.PROFILE_SOURCE == 'sheet' || hashFiles('backend/src/owner/profile.ts') == ''";
 /** The concurrency group of a per-user file: the owner keeps `base` byte for byte; user u2 gets `base-u2`. */
 export function perUserGroup(base: string): string {
   return "${{ (inputs.user || '" + OWNER_USER + "') == '" + OWNER_USER + "' && '" + base + "' || format('" + base + "-{0}', inputs.user) }}";
@@ -247,7 +252,27 @@ export const VERIFY: WorkflowSpec = {
   secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'ANTHROPIC_API_KEY'],
   commands: ['npm ci --omit=dev', 'npm run ops-verify'],
 };
-export const WORKFLOWS: readonly WorkflowSpec[] = [NIGHTLY, NIGHTLY_BACKUP, MY_OPTIONS, AI_DISPATCH, CI, RECORD, TELEGRAM_CHECK, ANALYZE, EXIT_REPORT, SEND_EXIT, TELEGRAM_SETUP, FETCH_FILES, MIGRATE_DATA_TABS, LONG_HISTORY, WATCHDOG, VERIFY];
+/**
+ * Owner 2026-11-06 (a new user without a terminal): the Setup Check as a button (src/setupCheck.ts). Manual only,
+ * read-only, its own group `setup`. Every key it tests is passed; the table goes to the run summary after the leak
+ * check (names only, never a value). The Profile tab is read first (continue-on-error: a bad tab still gives the table).
+ */
+export const SETUP_CHECK: WorkflowSpec = {
+  file: 'setup-check.yml', crons: [], dispatch: true, timeoutMinutes: 10, concurrencyGroup: perUserGroup('setup'), perUser: true, readsProfile: true,
+  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'SEC_CONTACT_EMAIL', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_WEBHOOK_SECRET'],
+  commands: ['npm run setup-check'],
+};
+/**
+ * Owner 2026-11-06: the template input tabs as a button (src/initUserSheets.ts). Manual only; it only ADDS a missing
+ * tab (Portfolio, 🎯 Watchlist, 💾 Script Properties), never writes an existing one. Group `setup`; not one of the
+ * six sheet writers the data move waits for (it touches only tabs that do not exist yet).
+ */
+export const INIT_USER_SHEETS: WorkflowSpec = {
+  file: 'init-user-sheets.yml', crons: [], dispatch: true, timeoutMinutes: 10, concurrencyGroup: perUserGroup('setup'), perUser: true, readsProfile: true,
+  secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
+  commands: ['npm run init-user-sheets'],
+};
+export const WORKFLOWS: readonly WorkflowSpec[] = [NIGHTLY, NIGHTLY_BACKUP, MY_OPTIONS, AI_DISPATCH, CI, RECORD, TELEGRAM_CHECK, ANALYZE, EXIT_REPORT, SEND_EXIT, TELEGRAM_SETUP, FETCH_FILES, MIGRATE_DATA_TABS, LONG_HISTORY, WATCHDOG, VERIFY, SETUP_CHECK, INIT_USER_SHEETS];
 
 /** The six workflows that write the spreadsheets: the migration waits for their running runs, and they respect its pause. */
 export const SHEET_WRITER_WORKFLOWS: readonly WorkflowSpec[] = [NIGHTLY, ANALYZE, EXIT_REPORT, SEND_EXIT, AI_DISPATCH, MY_OPTIONS];

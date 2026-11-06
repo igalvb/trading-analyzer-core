@@ -52,6 +52,8 @@ export interface EngineRead {
   /** Research extras (fix plan B1/D2 targets test): the plan's R:R to T1 at the entry and the T1 time estimate in days. */
   readonly rrToT1?: number | null;
   readonly t1Days?: number | null;
+  /** Options sentiment P2 (applied runs only): the same night's conviction, timing and action with options OFF. */
+  readonly optionsOff?: { readonly finalConviction: number; readonly timing: string; readonly action: string } | null;
 }
 
 const num = (x: unknown): number | null => (typeof x === 'number' && Number.isFinite(x) ? x : null);
@@ -86,6 +88,7 @@ export function engineReadOf(art: TickerArtifacts, t: string, day: string, close
     } : null,
     rrToT1: r ? num(r.techPlan.rrToT1) : null,
     t1Days: r ? num((r.techPlan.t1Time as { baseDays?: unknown } | null | undefined)?.baseDays) : null,
+    ...(art.optionsOff ? { optionsOff: { finalConviction: art.optionsOff.finalConviction, timing: art.optionsOff.timing, action: art.optionsOff.action } } : {}),
   };
 }
 

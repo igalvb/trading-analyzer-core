@@ -28,6 +28,10 @@ import { newPaperState, paperDay, accountIds, standings, type PaperDayInput } fr
 import { PAPER_OWNER_LIST, LAB_LABEL, JAMES_IDS, JAMES_QG_ID, JAMES_QG_RULE, JAMES_GROUP, labHeld } from '../src/paper/paperLab.ts';
 import { logRows, valuesRows } from '../src/paper/paperLog.ts';
 import type { EngineRead, ExitReadResult } from '../src/backtest/engineRun.ts';
+import { RESULTS } from '../src/profile/results.ts';
+/** Cases that read a results pack (profile `results`): skipped under a profile that names none (the test profile);
+ *  a copy with its own pack runs them with its profile (npm test does not). */
+const NEEDS_PACK = RESULTS ? false : 'needs a results pack (the profile names none)';
 
 function datesTo(last: string, n: number): string[] {
   const out: string[] = []; const d = new Date(last + 'T12:00:00Z');
@@ -125,7 +129,7 @@ describe('FL-19g — the score', () => {
     fs.writeFileSync(path.join(dir, 'bad.ceo.json'), JSON.stringify({ terms: { X: [{ from: 1 }] } }));
     assert.throws(() => loadCeoTable('bad', dir), /not valid/);
   });
-  test('the CEO table on a past day: founder; tenure 5+ years; an interim gap fails; no entry = unknown', { skip: 'owner-only: needs the owner results pack (runs in the overlay)' }, () => {
+  test('the CEO table on a past day: founder; tenure 5+ years; an interim gap fails; no entry = unknown', { skip: NEEDS_PACK }, () => {
     assert.equal(teamItem('NVDA', '2010-01-04').state, 'pass');
     assert.equal(teamItem('MSFT', '2018-01-02').state, 'fail', 'Nadella from 2014-02: 3.9 years');
     assert.equal(teamItem('MSFT', '2019-02-05').state, 'pass');
@@ -211,7 +215,7 @@ describe('FL-19g — the gate on a host model', () => {
 describe('FL-19g — the report page, All Models, Bottom Line (display only)', () => {
   const D = datesTo('2026-10-27', 260);
   const chart = { dates: D, closes: D.map((_, i) => 100 + i), volumes: D.map(() => 2e6) };
-  test('the page renders every item with its source; item 5 is "your call"; the disclaimer; history lines', { skip: 'owner-only: needs the owner results pack (runs in the overlay)' }, () => {
+  test('the page renders every item with its source; item 5 is "your call"; the disclaimer; history lines', { skip: NEEDS_PACK }, () => {
     const r = buildQualityRead('MU', chart, { revenueGrowth: 0.38, grossMargins: 0.41 });
     assert.equal(r.status, 'ok'); assert.equal(r.outOf, 8);
     assert.equal(r.points, 5, 'team (Mehrotra 2017), adoption, product-market fit, chart, tradability');

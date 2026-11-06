@@ -52,3 +52,10 @@ test('a row typed into the template is read back as a holding', () => {
   assert.equal(p.stocks[0]?.avgCost, 150);
   assert.equal(p.stocks[0]?.entryDateAssumed, undefined);
 });
+
+test('fix 2026-11-06: a sheet moved to three spreadsheets gets no Script Properties copy', async () => {
+  const s = fakeSheet([Tabs.PORTFOLIO, Tabs.WATCHLIST]);
+  await initUserSheets({ ...s.deps, migrated: async () => true });
+  assert.deepEqual(s.written, {});
+  assert.ok(s.lines.some((l) => l.includes('kept in your data spreadsheet')));
+});

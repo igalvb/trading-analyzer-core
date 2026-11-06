@@ -18,6 +18,7 @@ import { appendNight } from '../paper/paperLog.ts';
 import type { GatedRead, OptionsRead, OptionsShadow } from '../analysis/options/nightlyRead.ts';
 import { OPTIONS_READ_APPLIED } from '../analysis/options/nightlyRead.ts';
 import type { MarketOptionsRead } from '../analysis/options/marketRead.ts';
+import type { MeasuresScore, OptionsMeasures } from '../analysis/options/measures.ts';
 
 export const OPTIONS_READS_TAB = '📈 Options Reads';
 export const OPTIONS_READ_SNAPSHOTS_TAB = '📦 Options Read Snapshots';
@@ -145,4 +146,48 @@ export async function saveLatestRead(kv: PropertyStore, r: OptionsRead, nowMs: n
 export async function loadLatestRead(kv: PropertyStore, ticker: string, nowMs: number): Promise<OptionsRead | null> {
   const r = await cacheGet<OptionsRead>(kv, OPTIONS_READ_LAST_KEY + ticker.toUpperCase(), nowMs);
   return r && r.v === 1 && r.status === 'ok' ? r : null;
+}
+
+// ───────────── 📐 Options Measures (options weights due diligence 2026-11-06): one row per stock per night ─────────────
+
+export const OPTIONS_MEASURES_TAB = '📐 Options Measures';
+export const OPTIONS_MEASURES_HEADER: readonly string[] = [
+  'Day', 'Ticker', 'Spot', '~30d expiry (days)', 'Smirk (vol pts)', 'ATM call IV ~30d', 'ATM put IV ~30d', 'IV spread call−put (vol pts)',
+  'Option volume', 'Stock volume', 'O/S', 'Call OI', 'Put OI', 'P/C OI', 'LEAPS IV', '1-year realised vol',
+  'Nights of history', 'Smirk', 'Smirk pts', 'IV change', 'IV change pts', 'IV spread', 'IV spread conf pts', 'O/S', 'O/S conf pts', 'ΔOI P/C top fifth (shadow)',
+  'Conviction pts (capped)', 'Entry conf pts (capped)', 'BUY_NOW delay (shadow)',
+];
+
+const MEASURE_FIELDS = ['day', 'ticker', 'spot', 'expDays', 'smirk', 'atmCallIv', 'atmPutIv', 'ivSpread', 'optVolume', 'stockVolume', 'osRatio', 'callOi', 'putOi', 'pcOi', 'leapsIv', 'rv1y'] as const;
+
+/** One 📐 row: tonight's measures and their points. */
+export function optionsMeasuresRow(m: OptionsMeasures, s: MeasuresScore | null): TabCell[] {
+  return [
+    ...MEASURE_FIELDS.map((k) => m[k]),
+    s?.nights, s?.smirk.state, s?.smirk.pts, s?.ivChange.state, s?.ivChange.pts, s?.ivSpread.state, s?.ivSpread.pts, s?.os.state, s?.os.pts, s ? s.oiBuild : '',
+    s?.convictionPts, s?.entryConfidencePts, s ? s.delayShadow : '',
+  ].map(c);
+}
+
+/** 📐 history: ticker -> the stored nights (oldest first). */
+export async function readOptionsMeasures(store: TabStore): Promise<Map<string, OptionsMeasures[]>> {
+  const rows = (await store.read(OPTIONS_MEASURES_TAB, MEASURE_FIELDS.length)) ?? [];
+  const out = new Map<string, OptionsMeasures[]>();
+  const n = (v: TabCell | undefined): number | null => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  for (const r of rows.slice(1)) {
+    const day = String(r[0] ?? ''), t = String(r[1] ?? '').toUpperCase();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !t) continue;
+    const m: OptionsMeasures = {
+      day, ticker: t, spot: n(r[2]), expDays: n(r[3]), smirk: n(r[4]), atmCallIv: n(r[5]), atmPutIv: n(r[6]), ivSpread: n(r[7]),
+      optVolume: n(r[8]) ?? 0, stockVolume: n(r[9]), osRatio: n(r[10]), callOi: n(r[11]) ?? 0, putOi: n(r[12]) ?? 0, pcOi: n(r[13]), leapsIv: n(r[14]), rv1y: n(r[15]),
+    };
+    (out.get(t) ?? out.set(t, []).get(t)!).push(m);
+  }
+  for (const xs of out.values()) xs.sort((a, b) => a.day.localeCompare(b.day));
+  return out;
+}
+
+/** 📐: tonight's rows (written once per day). Returns the rows written (0 = already stored). */
+export async function recordOptionsMeasures(store: TabStore, day: string, rows: readonly TabCell[][]): Promise<number> {
+  return rows.length ? appendNight(store, OPTIONS_MEASURES_TAB, OPTIONS_MEASURES_HEADER, day, rows) : 0;
 }

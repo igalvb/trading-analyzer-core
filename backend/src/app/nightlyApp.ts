@@ -25,8 +25,10 @@
  *   options.chains    (options sentiment plan A-1, P0, part B) before the analysis: every nightly stock's Cboe chain, the
  *                     paper list, SPY and QQQ, once each, into ONE run-wide memo that paper.trade reuses; the per-stock
  *                     reads (A-2), the A-5 gate and the market read. options.reads (after the Exit report) stores them.
- *                     Shadow phase (A-8): each analysis also computes its "if applied" numbers; the decisions use the
- *                     options snapshot exactly as before (OPTIONS_READ_APPLIED false).
+ *                     Profile `options.applied` (OPTIONS_READ_APPLIED, P2 go-live, default off): each stock is scored
+ *                     with its own gated read (optionsSeedFor) and also with options off (the 📈 row, the Buy report
+ *                     line, Decision History, the paper twin). Off = shadow (A-8): each analysis computes its "if applied"
+ *                     numbers; the decisions use the options snapshot exactly as before.
  * The nightly makes no AI call (F-W11). One portfolio reader: the Portfolio sheet (F8).
  */
 
@@ -79,7 +81,7 @@ import { OPTIONS_READ_APPLIED, seedOptionsWorkbook, shadowLine } from '../analys
 import { runFundamentalsHistoryNight } from '../storage/fundamentalsHistory.ts';
 import { formatDateInTz } from '../core/dates.ts';
 import { orElseAsync } from '../core/guard.ts';
-import { optionsRunReport, recordOptionsNight, runOptionsChains, shadowInputOf, type OptionsNight } from '../jobs/options/optionsNight.ts';
+import { measuresOfNight, optionsRunReport, recordOptionsNight, runOptionsChains, shadowInputOf, type OptionsNight } from '../jobs/options/optionsNight.ts';
 
 export interface NightlyAppOptions {
   readonly tickerTimeoutMs?: number;
@@ -137,16 +139,17 @@ export async function scratchFactory(s: Services): Promise<(override?: Record<st
 }
 
 /**
- * A-4 (go-live only, OPTIONS_READ_APPLIED): the ticker's own gated read as its _OPTIONS_SNAPSHOT seed. In the shadow
- * phase, and for a ticker without a fresh read, null: the scratch keeps the shared snapshot exactly as before.
+ * A-4 (go-live, profile `options.applied` = OPTIONS_READ_APPLIED): every nightly stock's scratch is seeded with its OWN
+ * gated read as its _OPTIONS_SNAPSHOT. A stock without a fresh read (none, or older
+ * than 2 trading days, A-5) gets an EMPTY snapshot: options are not applied to it (never another stock's shared one).
+ * Shadow phase, or no options night (a memory run): null, the scratch keeps the shared snapshot exactly as before.
  */
-export async function optionsSeedFor(night: OptionsNight | null, ticker: string, applied = OPTIONS_READ_APPLIED): Promise<Record<string, unknown[][]> | null> {
+export async function optionsSeedFor(night: Pick<OptionsNight, 'gated'> | null, ticker: string, applied = OPTIONS_READ_APPLIED): Promise<Record<string, unknown[][]> | null> {
   if (!applied || !night) return null;
   const g = night.gated.get(ticker.toUpperCase());
-  if (!g || !g.fresh || !g.read) return null;
-  const wb = await seedOptionsWorkbook(g.read);
+  const wb = g && g.fresh && g.read ? await seedOptionsWorkbook(g.read) : null;
   const sh = wb?.getSheetByName(OPTIONS_SNAPSHOT_SHEET);
-  return sh ? { [OPTIONS_SNAPSHOT_SHEET]: sh.grid() as unknown[][] } : null;
+  return { [OPTIONS_SNAPSHOT_SHEET]: sh ? sh.grid() as unknown[][] : [] };
 }
 
 export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): Promise<NightlyApp> {
@@ -170,7 +173,10 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
       ...tickerDeps(s, await scratch(await optionsSeedFor(night, t)), { noAi: true }),
       // The scratch workbooks share one _OPTIONS_SNAPSHOT (one ticker's): another ticker's snapshot is expected here.
       optionsSnapshotShared: true,
-      ...(OPTIONS_READ_APPLIED ? {} : { optionsShadow: (x: string) => shadowInputOf(night, x) }),
+      // Shadow: the "if applied" numbers. Applied (P2): tonight's gated read (read day, the note when none is applied).
+      ...(OPTIONS_READ_APPLIED
+        ? { optionsMeasures: (x: string) => measuresOfNight(night, x), optionsGated: (x: string) => night?.gated.get(x.toUpperCase()) ?? (night ? { read: null, source: 'none' as const, ageTradingDays: null, fresh: false, note: 'No options read for ' + x.toUpperCase() + ' tonight' } : null) }
+        : { optionsShadow: (x: string) => shadowInputOf(night, x) }),
     }, t);
   });
   const attempts = new Map<string, number>();
@@ -253,7 +259,7 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
         const lines: string[] = [];
         for (const c of input.candidates) {
           const sh = attempts.has(c.ticker) ? await cache.get(c.ticker).then((a) => a.optionsShadow ?? null).catch((e: unknown) => { ctx.log.child(c.ticker).warning('buy report: options shadow line left out (the analysis did not settle)', { detail: String(e) }); return null; }) : null;
-          if (sh) lines.push(shadowLine(sh));
+          if (sh) lines.push(shadowLine(sh, OPTIONS_READ_APPLIED));
         }
         const rep = optionsRunReport(night);
         return {
@@ -329,7 +335,11 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
     // Owner 2026-11-04 (backlog row 39): the '🎯 Watchlist Summary' tab is no longer written (unused; the Buy report covers it).
     if (!opts?.writeDecisionHistory) return;
     const ss = await s.openWorkbook([DECISION_HISTORY_SHEET]);
-    for (const r of watchlistDecisionRows(rows)) appendDecisionHistory(ss, r.ticker, r.result.fundResult, r.result.techPlan, r.result.decision!, s.clock.now());
+    for (const r of watchlistDecisionRows(rows)) {
+      // Options sentiment A-6 (applied runs only): the appended options cells of the memoised analysis.
+      const opt = OPTIONS_READ_APPLIED && attempts.has(r.ticker) ? ((await settledWithin(cache.get(r.ticker), 5_000))?.optionsHistory ?? null) : null;
+      appendDecisionHistory(ss, r.ticker, r.result.fundResult, r.result.techPlan, r.result.decision!, s.clock.now(), opt);
+    }
     await ss.flush();
   };
 

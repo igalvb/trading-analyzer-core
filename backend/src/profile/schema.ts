@@ -95,6 +95,14 @@ export interface Profile {
    * targets, trims only at +25% after tax). Default false (built OFF; switched on after the owner sees the table).
    */
   readonly exit: { readonly weeklyStops: boolean };
+  /**
+   * Options go-live (docs/OPTIONS_SENTIMENT_PLAN.md P2 / A-9, C-1) with the weights of
+   * docs/OPTIONS_WEIGHTS_DUE_DILIGENCE_2026-11-06.md: `applied` = every nightly stock gets its own gated read, SHOWN
+   * everywhere; today's options terms score 0 (tech Options category, CONFIRM / CONFLICT, LEAPS lean, "IV rank");
+   * the new measures (smirk, IV change; IV spread and O/S on timing) may score within the hard caps once 60 nights are
+   * stored; C-1 gates any snapshot at 2 trading days. Default false: the read stays in shadow.
+   */
+  readonly options: { readonly applied: boolean };
   /** Absent = no live bot (the default for every user but the owner, open question Q5). */
   readonly live: LiveProfile | null;
   /** The results pack name (P4); null = "no history for your list yet". */
@@ -115,6 +123,7 @@ export const PROFILE_KEYS: readonly string[] = [
   'sheets.protectedTabs', 'sheets.portfolio.headerAliases', 'sheets.portfolio.endMarkers.exact', 'sheets.portfolio.endMarkers.contains', 'sheets.portfolio.assumedPurchaseDate',
   'features.paper', 'features.liveBot', 'features.myOptions', 'features.ai',
   'exit.weeklyStops',
+  'options.applied',
   'live.follow', 'live.startValue', 'live.fractional', 'live.minTrade', 'live.maxOrders', 'live.capSlack', 'live.targetMode', 'live.alertFalls', 'live.allowList',
   'results',
 ];
@@ -243,6 +252,7 @@ export function validateProfile(input: unknown): ProfileResult {
   const assumedPurchaseDate = str('sheets.portfolio.assumedPurchaseDate', false, DAY) ?? '2020-01-01';
 
   const exit = { weeklyStops: bool('exit.weeklyStops', false) };
+  const options = { applied: bool('options.applied', false) };
   const features = { paper: bool('features.paper', true), liveBot: bool('features.liveBot', false), myOptions: bool('features.myOptions', true), ai: bool('features.ai', false) };
 
   let live: LiveProfile | null = null;
@@ -273,7 +283,7 @@ export function validateProfile(input: unknown): ProfileResult {
       version, user: { id, timeZone }, lists: { core, researchCore, pickers, watchlistSeed },
       paper: { start, end, fixedUniverse }, research: { testAUniverse, universe, extraTickers }, models: { pairs }, tax: { rate },
       benchmarks: { index }, labels: { listName, holdResearchCore, holdCore, researchName },
-      sheets: { protectedTabs, portfolio: { headerAliases, endMarkers, assumedPurchaseDate } }, features, exit, live, results,
+      sheets: { protectedTabs, portfolio: { headerAliases, endMarkers, assumedPurchaseDate } }, features, exit, options, live, results,
     },
   };
 }

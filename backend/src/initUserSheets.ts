@@ -16,6 +16,7 @@ import { activeProfile } from './profile/active.ts';
 import { Tabs } from './sheets/tabs.ts';
 import { STOCK_REQUIRED, OPTIONS_REQUIRED } from './sheets/readers/portfolio.ts';
 import { PROPERTY_STORE_HEADER } from './storage/kv.ts';
+import { MIGRATED_FLAG } from './sheets/threeSheets.ts';
 
 /** The template Portfolio layout, row by row (A1 down). The readers find each table by its header row. */
 export function portfolioTemplateRows(): string[][] {
@@ -48,6 +49,8 @@ export interface InitDeps {
   readonly write: (title: string, rows: string[][]) => Promise<void>;
   readonly watchlistSeed: readonly string[];
   readonly out: (line: string) => void;
+  /** The sheet is marked as moved to three spreadsheets: its 💾 Script Properties lives in the data sheet, not here. */
+  readonly migrated?: () => Promise<boolean>;
 }
 
 export async function initUserSheets(d: InitDeps): Promise<number> {
@@ -58,8 +61,12 @@ export async function initUserSheets(d: InitDeps): Promise<number> {
     // The runs refuse a sheet without this tab (sheets/threeSheets.ts checkStartup), so a new sheet needs it, empty.
     [Tabs.SCRIPT_PROPERTIES, [[...PROPERTY_STORE_HEADER]]],
   ];
+  // Fix 2026-11-06 (live): on a sheet already moved to three spreadsheets the store tab lives in the data sheet; adding
+  // an empty copy here only clutters My Portfolio.
+  const moved = d.migrated ? await d.migrated() : false;
   let added = 0;
   for (const [title, rows] of plan) {
+    if (moved && title === Tabs.SCRIPT_PROPERTIES) { d.out('➖ ' + title + ': kept in your data spreadsheet (this sheet was moved to three spreadsheets).'); continue; }
     if (tabs.includes(title)) { d.out('✅ ' + title + ': already there, not touched.'); continue; }
     await d.addTab(title);
     await d.write(title, rows);
@@ -85,6 +92,7 @@ async function live(): Promise<number> {
     write: async (title, rows) => { await api.spreadsheets.values.update({ spreadsheetId: id, range: quote(title) + '!A1', valueInputOption: 'RAW', requestBody: { values: rows } }); },
     watchlistSeed: activeProfile().lists.watchlistSeed,
     out,
+    migrated: async () => ((await api.spreadsheets.get({ spreadsheetId: id, fields: 'developerMetadata(metadataKey)' })).data.developerMetadata ?? []).some((m) => m.metadataKey === MIGRATED_FLAG),
   });
 }
 

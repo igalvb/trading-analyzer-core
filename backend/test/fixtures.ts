@@ -19,6 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isCorePath } from '../scripts/coreManifest.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const FIXTURE_DIR = path.join(here, '..', 'legacy', 'historical_data');
@@ -80,6 +81,8 @@ export function listFixtures(): string[] {
   return fs
     .readdirSync(FIXTURE_DIR)
     .filter((f) => f.endsWith('.json'))
+    // The core's fixtures only (core-manifest.json): a private overlay's extra price files are not test fixtures.
+    .filter((f) => isCorePath('backend/legacy/historical_data/' + f))
     .map((f) => f.replace(/\.json$/, ''))
     .sort();
 }

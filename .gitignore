@@ -1,9 +1,22 @@
-node_modules/
+# Dependencies (a folder or a link to one) and build output
+node_modules
+backend/out/
+
+# Secrets: never committed (keys live in GitHub Secrets, Cloudflare secrets or a local .env)
 .env
 .env.*
 !.env.example
 *service-account*.json
 *credentials*.json
+
+# OS junk and local tools
 .DS_Store
 .claude/
-backend/out/
+
+# Local only: big media, old versions, private sheet exports, local logs, personal files
+videos/
+old_versions/
+real-sheet-export*
+session-logs-local-only/
+My Portfolio.xlsx
+*.skill

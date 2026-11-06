@@ -4,14 +4,14 @@
  * in a JSON file per profile, named by the profile key `results`; the core holds no history figure.
  *
  *   profile.results = null      -> no pack: the pages print NO_HISTORY instead of numbers
- *   profile.results = '<name>'  -> <RESULTS_DIR or src/owner/results>/<name>.json; a missing or bad pack refuses the run
- *
- * P4-P8: the owner's pack is src/owner/results/owner-2026-10.json (the owner overlay; it moves out with it in P9).
+ *   profile.results = '<name>'  -> <RESULTS_DIR, else src/owner/results (a private overlay), else backend/results>/<name>.json;
+ *                                  a missing or bad pack refuses the run
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { activeProfile } from './active.ts';
+import { overlayResultsDir } from '../overlay.ts';
 
 /** What the pages print when the profile has no results pack. */
 export const NO_HISTORY = 'No history for your list yet. Run the research step.';
@@ -78,7 +78,8 @@ export function packProblems(v: unknown, name: string): string[] {
   return out;
 }
 
-export const defaultResultsDir = (): string => path.resolve(import.meta.dirname, '..', '..', 'results');
+/** The default results folder: src/owner/results/ in a copy with a private overlay, else backend/results/ (src/overlay.ts). */
+export const defaultResultsDir = (): string => overlayResultsDir();
 
 /** Loads the pack `name` from `dir`; throws one plain line when it is missing or bad. */
 export function loadResultsPack(name: string, dir: string = process.env.RESULTS_DIR || defaultResultsDir()): ResultsPack {

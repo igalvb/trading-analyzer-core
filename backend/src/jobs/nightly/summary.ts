@@ -76,7 +76,7 @@ export function optionsSummaryLine(o: OptionsReadsSummary): string {
   const bits = [o.readTonight + ' of ' + o.stocks + ' stocks read tonight'];
   if (o.stored.length) bits.push('a stored read used for ' + names(o.stored));
   if (o.missing.length) bits.push('missing for ' + names(o.missing));
-  return 'Options reads' + (o.applied ? '' : ' (not yet applied)') + ': ' + bits.join('; ') + '.';
+  return 'Options reads' + (o.applied ? ' (applied)' : ' (not yet applied)') + ': ' + bits.join('; ') + '.';
 }
 
 export function countStates(items: ReadonlyArray<{ readonly state: OutcomeState }>): StateCounts {

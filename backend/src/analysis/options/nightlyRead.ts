@@ -16,7 +16,13 @@
  *   P0   checksOf          total volume at the nightly hour (the market-closed formula?), delta / iv present, the
  *                          chain's JSON size and parse time: logged every night.
  *
- * Nothing here changes a score, a tier or a decision while the read is in shadow (OPTIONS_READ_APPLIED false).
+ *   C-1  gateOptionsSnapshot   any _OPTIONS_SNAPSHOT (Analyze's fallback included) older than 2 trading days is not
+ *                          applied; a younger one has its daysToExpiry re-aged from the expiry.
+ *   P2   computeOptionsApplied  with the read applied: the same numbers with options OFF, so the 📈 row, the Buy report
+ *                          line, Decision History and the paper twin show what options changed.
+ *
+ * Go-live (P2, owner 2026-11-06) is the profile flag `options.applied` (OPTIONS_READ_APPLIED). Off (the default): the
+ * read stays in shadow and nothing here changes a score, a tier or a decision.
  */
 
 import { chainColumnsOf, parseOcc, type CboeChainJson } from '../../fetch/cboe.ts';
@@ -30,12 +36,15 @@ import type { PropertyStore } from '../../storage/kv.ts';
 import { MemoryWorkbookBackend, ReportWorkbook } from '../../sheets/reportSheet.ts';
 import { saveOptionsSnapshot } from '../../reports/options/tabs.ts';
 import { readOptionsSnapshot, type SnapshotRead } from '../../reports/options/run.ts';
+import { activeProfile } from '../../profile/active.ts';
 
 /**
- * A-8 / A-9: false = shadow phase. The per-stock read is stored and shown "not yet applied"; the decision runs with
- * options as before. Go-live (P2) needs 10 shadow nights and the owner's yes.
+ * A-8 / A-9: the profile flag `options.applied` (default false). False = shadow phase: the per-stock read is stored and
+ * shown "not yet applied"; the decision runs with options as before. True = go-live (P2): each nightly stock is scored
+ * with its own gated read (A-4), a missing read is a gap in the run (A-7), C-1 is on, and the scores follow
+ * docs/OPTIONS_WEIGHTS_DUE_DILIGENCE_2026-11-06.md (today's terms 0; the new measures capped, analysis/options/measures.ts).
  */
-export const OPTIONS_READ_APPLIED = false;
+export const OPTIONS_READ_APPLIED: boolean = activeProfile().options.applied;
 /** A-5: a stored read older than this many trading days is not applied. */
 export const OPTIONS_READ_MAX_AGE_TRADING_DAYS = 2;
 
@@ -203,7 +212,11 @@ export async function snapshotReadOf(r: OptionsRead, nowMs: number, timeZone: st
   return wb ? readOptionsSnapshot(wb, r.ticker, nowMs, timeZone) : null;
 }
 
-/** A memory workbook holding only this read's _OPTIONS_SNAPSHOT tab (null for a read without contracts). */
+/**
+ * A memory workbook holding only this read's _OPTIONS_SNAPSHOT tab (null for a read without contracts). The context is
+ * the read's own (strike-weighted net $ bias, as Analyze): C-2's delta-dollar bias stays a shadow column, because the
+ * weights review (2026-11-06) scores none of these signals; it is not needed to fix a signal that scores 0.
+ */
 export async function seedOptionsWorkbook(r: OptionsRead): Promise<ReportWorkbook | null> {
   if (r.status !== 'ok' || !r.rows.length) return null;
   const asOfMs = Date.parse(r.asOfUtc);
@@ -211,6 +224,7 @@ export async function seedOptionsWorkbook(r: OptionsRead): Promise<ReportWorkboo
   saveOptionsSnapshot(wb, r.ticker, contractsOf(r, asOfMs) as unknown as ScoredContract[], r.context, r.spot, { nowMs: asOfMs, timeZone: 'UTC', legacyText: false });
   return wb;
 }
+
 
 /** pcSig, domSig, nbSig, dirSig and the LEAPS lean of a snapshot, the same arithmetic as analyzeOptionsForScoring. */
 export function signalsOf(snap: OptionsSnapshot | null): OptionsSignals | null {
@@ -285,6 +299,26 @@ export function gateRead(tonight: OptionsRead | null, stored: OptionsRead | null
   }
   const t = tonight?.ticker ?? stored?.ticker ?? '';
   return { read: null, source: 'none', ageTradingDays: null, fresh: false, note: 'No options read for ' + t + ' tonight' };
+}
+
+/**
+ * C-1 (applied only): the 2-trading-day gate on ANY _OPTIONS_SNAPSHOT the analysis reads (the nightly seed and
+ * Analyze's own, including the old one it falls back to when its fresh fetch failed). Older: not applied (null, with
+ * the plain note). Otherwise each contract's daysToExpiry is re-aged from its expiry (the saved days counted from the
+ * save time). A mismatch or a snapshot without a timestamp is returned as is.
+ */
+export function gateOptionsSnapshot(
+  snap: SnapshotRead | null, nowMs: number, timeZone: string, maxAge = OPTIONS_READ_MAX_AGE_TRADING_DAYS,
+): { readonly snap: SnapshotRead | null; readonly readDay: string | null; readonly ageTradingDays: number | null; readonly note: string } {
+  const ts = snap && !snap.mismatch && snap.timestamp ? Date.parse(snap.timestamp) : NaN;
+  if (!snap || !Number.isFinite(ts)) return { snap, readDay: null, ageTradingDays: null, note: '' };
+  const readDay = optionsNightDay(ts, timeZone);
+  const age = tradingDaysBetween(readDay, optionsNightDay(nowMs, timeZone));
+  if (age > maxAge) return { snap: null, readDay, ageTradingDays: age, note: 'Options read is ' + age + ' trading days old' };
+  const elapsedDays = Math.max(0, (nowMs - ts) / DAY_MS);
+  const contracts = (snap.contracts ?? []).map((c) => (typeof c.daysToExpiry === 'number' && Number.isFinite(c.daysToExpiry)
+    ? { ...c, daysToExpiry: Math.max(0, Math.round(c.daysToExpiry - elapsedDays)) } : c));
+  return { snap: { ...snap, contracts }, readDay, ageTradingDays: age, note: '' };
 }
 
 // ───────────────────────── A-8: the shadow ("if applied") ─────────────────────────
@@ -366,14 +400,74 @@ export function computeOptionsShadow<T extends { techScore: number; timing: stri
   };
 }
 
+// ───────────────────────── P2: applied (go-live) ─────────────────────────
+
+/** The scores with options OFF (the twin of an applied run): what the analysis gives without any options read. */
+export interface OptionsOff {
+  readonly techScore: number;
+  readonly finalConviction: number;
+  readonly timing: string;
+  readonly action: string;
+}
+
+/** Decision History's appended options columns (A-6). */
+export interface DecisionOptionsCols {
+  /** The read's trading day ('' when none was applied). */
+  readonly readDay: string;
+  readonly state: 'CONFIRM' | 'CONFLICT' | 'neutral' | 'none';
+  readonly dirSig: number | null;
+  /** Conviction with options minus conviction with options off. */
+  readonly pts: number;
+}
+
+/** A-6: the Decision History options cells of one applied run. `opt` = the options read the decision used. */
+export function decisionOptionsCols(opt: OptionsScoring, readDay: string | null, finalConviction: number, off: OptionsOff | null): DecisionOptionsCols {
+  if (!opt.available) return { readDay: '', state: 'none', dirSig: null, pts: 0 };
+  return {
+    readDay: readDay ?? '', state: opt.confirm === 'neutral' ? 'neutral' : opt.confirm === 'confirm' ? 'CONFIRM' : 'CONFLICT',
+    dirSig: Math.round(opt.dirSig * 1000) / 1000, pts: off ? finalConviction - off.finalConviction : 0,
+  };
+}
+
+/**
+ * P2: the 📈 row / Buy report numbers of an APPLIED run, in the shadow's shape: "now" = options OFF, "if applied" = the
+ * decision as run (options applied). Null without a fresh gated read or when the analysis had no options read.
+ */
+export function computeOptionsApplied(
+  ticker: string,
+  x: {
+    readonly gated: GatedRead | null; readonly opt: OptionsScoring;
+    readonly tech: { readonly techScore: number; readonly timing: string }; readonly decision: { readonly finalConviction: number; readonly action: string };
+    readonly off: OptionsOff; readonly techExOptions: number;
+  },
+): OptionsShadow | null {
+  const g = x.gated, r = g?.read;
+  if (!g || !r || !g.fresh || !x.opt.available) return null;
+  const c2DirSig = r.c2 ? r.c2.dirSig : null;
+  return {
+    ticker, readDay: r.day, source: g.source, ageTradingDays: g.ageTradingDays,
+    confirm: x.opt.confirm, dirSig: x.opt.dirSig, leapsLean: x.opt.leapsLean,
+    techNow: x.off.techScore, techIfApplied: x.tech.techScore,
+    convictionNow: x.off.finalConviction, convictionIfApplied: x.decision.finalConviction,
+    timingNow: x.off.timing, timingIfApplied: x.tech.timing,
+    actionNow: x.off.action, actionIfApplied: x.decision.action,
+    techExOptions: x.techExOptions, c3Confirm: confirmOf(x.techExOptions, x.opt.dirSig),
+    c2DirSig, c2Confirm: c2DirSig == null ? null : confirmOf(x.tech.techScore, c2DirSig),
+  };
+}
+
 const signed = (n: number): string => (n > 0 ? '+' : '') + n;
 
-/** The owner-facing shadow line (Buy report, A-8): "options read 2026-10-30, not yet applied: CONFIRM, +8 if applied ...". */
-export function shadowLine(s: OptionsShadow): string {
+/**
+ * The owner-facing line (Buy report). Shadow (A-8): "options read 2026-10-30, not yet applied: CONFIRM, +8 conviction
+ * if applied (62 → 70) ...". Applied (P2, numbers from computeOptionsApplied): "options read 2026-11-06, applied:
+ * CONFIRM, +8 conviction from options (62 → 70) ...".
+ */
+export function shadowLine(s: OptionsShadow, applied = false): string {
   const d = s.convictionIfApplied - s.convictionNow;
-  const bits = [s.confirm.toUpperCase(), signed(d) + ' conviction if applied (' + s.convictionNow + ' → ' + s.convictionIfApplied + ')'];
+  const bits = [s.confirm.toUpperCase(), signed(d) + ' conviction ' + (applied ? 'from options' : 'if applied') + ' (' + s.convictionNow + ' → ' + s.convictionIfApplied + ')'];
   if (s.techIfApplied !== s.techNow) bits.push('tech ' + s.techNow + ' → ' + s.techIfApplied);
   if (s.timingIfApplied !== s.timingNow) bits.push('timing ' + s.timingNow + ' → ' + s.timingIfApplied);
   const when = s.source === 'stored' ? ' (stored read, ' + s.ageTradingDays + ' trading day' + (s.ageTradingDays === 1 ? '' : 's') + ' old)' : '';
-  return s.ticker + ' — options read ' + s.readDay + when + ', not yet applied: ' + bits.join(', ') + '.';
+  return s.ticker + ' — options read ' + s.readDay + when + (applied ? ', applied: ' : ', not yet applied: ') + bits.join(', ') + '.';
 }

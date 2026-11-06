@@ -8,8 +8,9 @@
 
 import { htmlEsc } from '../reports/pdf/workbookHtml.ts';
 import { STRATEGIES, STRATEGY_LABEL, standings, pctOf, PAPER_CASH, type PaperState } from './paperTrading.ts';
-import { LAB_SETUPS, LAB_LABEL, LILO_ID, ALL_ID, ALL_SHARES, ALL_LEAPS_ID, JAMES_IDS, JAMES_LILO_V2_ID, JAMES_GROUP, JAMES_MR_ID, JAMES_CYCLE_ID, JAMES_CYCLE_BTC_ID, JAMES_MM_ID, JAMES_LEAPS_IDS, JAMES_LEAPS_GROUP, labAccount, leapsId } from './paperLab.ts';
+import { LAB_SETUPS, LAB_LABEL, LILO_ID, ALL_ID, ALL_SHARES, ALL_LEAPS_ID, JAMES_IDS, JAMES_LILO_V2_ID, JAMES_GROUP, JAMES_MR_ID, JAMES_CYCLE_ID, JAMES_CYCLE_BTC_ID, JAMES_MM_ID, JAMES_LEAPS_IDS, JAMES_LEAPS_GROUP, OPTIONS_OFF_SETUPS, labAccount, leapsId } from './paperLab.ts';
 import { CONTRACT } from './paperLeaps.ts';
+import { CLAUDE_ID, CLAUDE_LABEL, CLAUDE_GROUP } from './paperClaude.ts';
 import { EXIT_TAX_PCT } from '../portfolio/exitTax.ts';
 
 export interface BagLine { readonly name: string; readonly qty: number; readonly unit: string; readonly price: number | null; readonly value: number; readonly cost: number }
@@ -45,6 +46,7 @@ export function bagsOf(state: PaperState, closeOf: (t: string) => number | null)
     };
   };
   for (const st of LAB_SETUPS) { const b = stockBag(st.id); out.push({ id: st.id, name: st.label, group: 'B your list', ...b }); }
+  for (const st of OPTIONS_OFF_SETUPS) if (lab.accounts[st.id]) out.push({ id: st.id, name: st.label, group: 'B your list', ...stockBag(st.id) });
   if (lab.lilo) {
     const k = lab.lilo;
     const lines = [...Object.entries(k.lines).filter(([, l]) => l.shares > 0).map(([t, l]) => stock(t, l.shares, l.cost)), ...(k.qqq.shares ? [stock('QQQ', k.qqq.shares, k.qqq.cost)] : [])];
@@ -94,6 +96,13 @@ export function bagsOf(state: PaperState, closeOf: (t: string) => number | null)
     if (!a) continue;
     const b = leapsBag(id);
     out.push({ id, name: LAB_LABEL[id] as string, group: JAMES_LEAPS_GROUP, cash: b.cash, lines: [...b.lines, ...Object.entries(a.shares ?? {}).map(([t, p]) => stock(t, p.shares, p.cost))] });
+  }
+  // 🤖 Claude, free choice (from its first fill): shares at tonight's close, calls at the last middle of bid and ask
+  const c = lab.claude;
+  if (c?.joined) {
+    out.push({ id: CLAUDE_ID, name: CLAUDE_LABEL, group: CLAUDE_GROUP, cash: c.cash, lines: Object.entries(c.pos).map(([n, p]) => p.kind === 'stock'
+      ? { ...stock(p.ticker, p.qty, p.cost), ...(closeOf(p.ticker) == null && p.mark != null ? { price: p.mark, value: p.qty * p.mark } : {}) }
+      : { name: n, qty: p.qty, unit: 'contracts', price: p.mark, value: p.qty * CONTRACT * (p.mark ?? p.cost / p.qty / CONTRACT), cost: p.cost }) });
   }
   return out;
 }

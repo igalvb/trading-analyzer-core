@@ -55,10 +55,14 @@ import { computeGann } from './gann.ts';
 import { computeConfluenceTargets } from './confluence.ts';
 import { computeFundamentalScore, peerSymbolsForScore, type FundamentalScore } from './fundamentalScore.ts';
 import { analyzeOptionsForScoring, type OptionsScoring } from './options/scoring.ts';
-import { computeOptionsShadow, type GatedRead, type OptionsShadow } from './options/nightlyRead.ts';
+import {
+  computeOptionsApplied, computeOptionsShadow, decisionOptionsCols, gateOptionsSnapshot,
+  type DecisionOptionsCols, type GatedRead, type OptionsOff, type OptionsShadow,
+} from './options/nightlyRead.ts';
 import type { SnapshotRead } from '../reports/options/run.ts';
 import { computeTechnicalPlan, type TechnicalPlan } from './techPlan/plan.ts';
-import { synthesizeDecision, type Decision } from './decision.ts';
+import { synthesizeDecision, type Decision, type OptionsWeights } from './decision.ts';
+import { capConviction, capEntryConfidence, type MeasuresScore } from './options/measures.ts';
 import { playerMappingReadV1 } from './models/brokerCourse/playerMapping.ts';
 import { zombieCompanyScreenV1, sharesOutstandingTrendReadV1, filingKeywordReadV1, filingKeywordRead, type CheckedFilingKeywordRead } from './models/brokerCourse/screens.ts';
 import type { SharesOutstandingPoint } from '../fetch/sec/edgar.ts';
@@ -285,6 +289,19 @@ export interface TickerAnalysisDeps {
    * decision is unchanged. Nightly only; never in legacy-parity mode.
    */
   readonly optionsShadow?: (ticker: string) => { readonly gated: GatedRead; readonly snap: SnapshotRead } | null;
+  /**
+   * Options sentiment P2 (profile `options.applied`; never in legacy-parity mode), with the weights of
+   * docs/OPTIONS_WEIGHTS_DUE_DILIGENCE_2026-11-06.md: the options read is SHOWN but today's terms score 0 (no Options
+   * category in the tech score, no CONFIRM / CONFLICT, no LEAPS lean, no "IV rank" penalty); the new measures may add
+   * -3 / +2 conviction and -5 entry confidence (0 until 60 nights). C-1: the snapshot is gated at 2 trading days and
+   * re-aged. The run also records itself with options OFF (art.optionsOff: Decision History, the paper twin).
+   * Absent / false: unchanged.
+   */
+  readonly optionsApplied?: boolean;
+  /** P2 nightly: tonight's gated read for this ticker (read day, source, the plain note when none is applied). */
+  readonly optionsGated?: (ticker: string) => GatedRead | null;
+  /** Applied, nightly: tonight's scored options measures (analysis/options/measures.ts; 0 points until 60 nights). */
+  readonly optionsMeasures?: (ticker: string) => MeasuresScore | null;
 }
 
 export interface TickerAnalysisResult {
@@ -320,6 +337,12 @@ export interface TickerArtifacts {
   fixedT2?: FixedT2Display | null;
   /** Options sentiment A-8: the "if applied" numbers of tonight's options read (shadow; nothing applied). */
   optionsShadow?: OptionsShadow | null;
+  /** Options sentiment P2 (applied runs only): the same run's scores with options OFF. */
+  optionsOff?: OptionsOff | null;
+  /** Options sentiment P2 (applied runs only): Decision History's options columns. */
+  optionsHistory?: DecisionOptionsCols | null;
+  /** Applied runs only: tonight's options measures and their points (nightly). */
+  optionsMeasures?: MeasuresScore | null;
   /** Text written to each model tab, by tab name. */
   texts: Record<string, string>;
   /** Set when the run aborted (legacy's top-level catch, or no price data). */
@@ -566,9 +589,16 @@ export async function runTickerAnalysisDetailed(
     log('📊 OWN score: ' + (fundResult.score != null ? fundResult.score + '/100 (' + fundResult.profile + ') ' + fundResult.verdict : 'N/A'));
 
     // 7.5. Options snapshot (direction-independent read first).
-    const optSnap: any = readOptionsSnapshot(ss, ticker, now(), deps.timeZone);
+    const applied = !parity && !!deps.optionsApplied;
+    let optSnap: any = readOptionsSnapshot(ss, ticker, now(), deps.timeZone);
+    // Options sentiment P2 / C-1 (applied only): older than 2 trading days = not applied; younger = re-aged.
+    const optGate = applied ? gateOptionsSnapshot(optSnap, now(), deps.timeZone) : null;
+    if (optGate) optSnap = optGate.snap;
+    const gatedTonight = applied && deps.optionsGated ? deps.optionsGated(ticker) : null;
     let optAnalysis = analyzeOptionsForScoring(optSnap, null, { plainLabels: !parity });
-    if (!optSnap) S('options', 'degraded', 'No options snapshot — run Options Analysis on this ticker first', 'NO_DATA_FOR_TICKER');
+    if (!optSnap && optGate?.note) S('options', 'degraded', optGate.note + ' — not applied', 'SAVED_COPY_TOO_OLD');
+    else if (!optSnap && applied && gatedTonight && gatedTonight.note) S('options', 'degraded', gatedTonight.note + ' — not applied', 'NO_DATA_FOR_TICKER');
+    else if (!optSnap) S('options', 'degraded', 'No options snapshot — run Options Analysis on this ticker first', 'NO_DATA_FOR_TICKER');
     else if (optSnap.mismatch) S('options', 'degraded', 'Snapshot is for ' + optSnap.ticker + ' — run Options Analysis on ' + ticker, 'NO_DATA_FOR_TICKER', deps.optionsSnapshotShared ? 'skipped' : undefined);
     else S('options', (optSnap.ageDays != null && optSnap.ageDays > 4) ? 'degraded' : 'ok',
       (optSnap.ageDays != null && optSnap.ageDays > 4) ? ('Snapshot is ~' + Math.round(optSnap.ageDays) + 'd old') : '',
@@ -577,21 +607,33 @@ export async function runTickerAnalysisDetailed(
       : 'ℹ️ No usable options snapshot for ' + ticker + ' — scoring proceeds without it');
 
     // 8. Technical plan -- zero fundamentals input.
-    const techPlan: RunTechPlan = computeTechnicalPlan(ind, gann, confluence, analysisChart, optAnalysis, parity ? {} : {
+    // Options weights due diligence (owner yes 2026-11-06), applied only: the tech score has NO Options category
+    // (dirSig and the LEAPS lean score 0), the "IV rank" entry-confidence penalty is gone and options cannot move timing
+    // into or out of AVOID: the plan is computed without an options read. The read is still shown (below).
+    const scoreOpt = applied ? analyzeOptionsForScoring(null, null) : optAnalysis;
+    const techPlan: RunTechPlan = computeTechnicalPlan(ind, gann, confluence, analysisChart, scoreOpt, parity ? {} : {
       ...(deps.nearestTargets ? { nearestTargets: true } : {}), ...(deps.fixedT2 ? { fixedT2: true } : {}),
     });
     if (status.spyRS && status.spyRS.state === 'degraded') techPlan.dataWarning = status.spyRS.detail;
+    // The new measures (nightly only; 0 until 60 nights): timing can only be delayed -- entry confidence, at most -5.
+    const measures = applied && deps.optionsMeasures ? deps.optionsMeasures(ticker) : null;
+    const entryConfOff = techPlan.entryConfidencePct;
+    if (measures && measures.entryConfidencePts < 0) techPlan.entryConfidencePct = Math.max(0, techPlan.entryConfidencePct + capEntryConfidence(measures.entryConfidencePts));
     log('🎯 Tech score: ' + techPlan.techScore + '/100  Regime ' + techPlan.regime + '  Timing ' + techPlan.timing);
     log('   Entry $' + techPlan.entryPrice.toFixed(2) + '  ETA ' + (techPlan.timeToEntry ? techPlan.timeToEntry.humanText : 'N/A') + '  Confidence ' + techPlan.entryConfidencePct + '%');
 
+    // Applied: CONFIRM / CONFLICT is shown against the tech score without options (C-3; it scores 0 anyway).
     optAnalysis = analyzeOptionsForScoring(optSnap, techPlan, { plainLabels: !parity });
-    if (optAnalysis.available) { techPlan.options = optAnalysis; log('   Options: ' + optAnalysis.confirm.toUpperCase() + ' — ' + optAnalysis.notes.join(' · ')); }
+    if (applied && optAnalysis.available && measures?.leapsCostNote) optAnalysis.notes.push(measures.leapsCostNote);
+    if (optAnalysis.available) { techPlan.options = optAnalysis; log('   Options' + (applied ? ' (shown, not scored)' : '') + ': ' + optAnalysis.confirm.toUpperCase() + ' — ' + optAnalysis.notes.join(' · ')); }
     art.optAnalysis = optAnalysis;
 
     // 9. Decision. synthesizeDecisionV7 reads getCachedMacroRegime_ itself (:3238).
+    // Applied: the legacy options terms score 0; only the new measures' capped points (-3 / +2) are added.
+    const optWeights: OptionsWeights | null = applied ? { points: measures ? capConviction(measures.convictionPts) : 0, notes: measures ? measures.notes.filter((n) => !n.startsWith('Options measures: not enough')) : [] } : null;
     const macroRead = await deps.getCachedMacroRegime();
     const acc = new StatusAccumulator();
-    const decision = synthesizeDecision(fundResult, techPlan, optAnalysis, macroRead as never, acc);
+    const decision = synthesizeDecision(fundResult, techPlan, optAnalysis, macroRead as never, acc, undefined, optWeights);
     const macroEntry = acc.get('macroRegime');
     if (macroEntry) {
       // Legacy's own detail text (:3239-3240); decision.ts's accumulator wording differs (F-11 note).
@@ -602,8 +644,22 @@ export async function runTickerAnalysisDetailed(
     }
     log('✅ Decision: ' + decision.action + '   Final Conviction ' + decision.finalConviction + '/100');
 
+    // 9.4. Applied: the same decision with options OFF (no points, no entry-confidence change), for the 📈 row, the Buy
+    // report line, Decision History's options columns and the paper twin "Engine, options off". Nothing above changes.
+    if (applied && optWeights) {
+      const changed = optWeights.points !== 0 || techPlan.entryConfidencePct !== entryConfOff;
+      const techOff: RunTechPlan = changed ? { ...techPlan, entryConfidencePct: entryConfOff } : techPlan;
+      const decOff = changed ? synthesizeDecision(fundResult, techOff, optAnalysis, macroRead as never, new StatusAccumulator(), undefined, { points: 0, notes: [] }) : decision;
+      const off: OptionsOff = { techScore: techOff.techScore, finalConviction: decOff.finalConviction, timing: techOff.timing, action: decOff.action };
+      art.optionsOff = off;
+      art.optionsMeasures = measures;
+      art.optionsHistory = decisionOptionsCols(optAnalysis, gatedTonight?.read?.day ?? optGate?.readDay ?? null, decision.finalConviction, off);
+      art.optionsShadow = computeOptionsApplied(ticker, { gated: gatedTonight, opt: optAnalysis, tech: techPlan, decision, off, techExOptions: techPlan.techScore });
+      if (optAnalysis.available) log('   Options applied (new weights): conviction ' + off.finalConviction + ' → ' + decision.finalConviction + (measures ? ', entry confidence ' + entryConfOff + ' → ' + techPlan.entryConfidencePct : ''));
+    }
+
     // 9.5. Options sentiment A-8 (shadow): the same scoring with tonight's own options read, kept aside. Display only.
-    if (!parity && deps.optionsShadow) {
+    if (!parity && !applied && deps.optionsShadow) {
       try {
         const sh = deps.optionsShadow(ticker);
         const targets = { ...(deps.nearestTargets ? { nearestTargets: true } : {}), ...(deps.fixedT2 ? { fixedT2: true } : {}) };

@@ -41,7 +41,7 @@ import type { QualityItem } from '../../reports/messages/catalog.ts';
 import type { ReportWorkbook } from '../../sheets/reportSheet.ts';
 import type { SheetsClient } from '../../sheets/client.ts';
 import { readWatchlist } from '../../sheets/readers/watchlist.ts';
-import { appendDecisionHistory, DECISION_HISTORY_SHEET } from '../../stores/decisionHistory.ts';
+import { appendDecisionHistory, DECISION_HISTORY_SHEET, type DecisionHistoryOptions } from '../../stores/decisionHistory.ts';
 import type { TabCell } from '../../storage/tabStore.ts';
 import { OWN_BLOCK_FLOOR, OWN_FILTER_THRESHOLD } from '../../types/decision.ts';
 import { mapLimit } from '../nightly/nightly.ts';
@@ -113,6 +113,8 @@ export interface BuyAnalysis {
   /** Options picks (LEAPS / short-term call); kept for Tier 1 only (Q2 default). */
   readonly options?: unknown;
   readonly dataQuality?: readonly QualityItem[];
+  /** Options sentiment A-6 (applied runs only): Decision History's appended options cells. */
+  readonly optionsHistory?: DecisionHistoryOptions | null;
 }
 export type BuyAnalyzeFn = (ticker: string) => Promise<BuyAnalysis | null | undefined>;
 
@@ -124,6 +126,8 @@ export interface HistoryRow {
   readonly fundResult: { readonly score: unknown };
   readonly techPlan: { readonly techScore: unknown };
   readonly decision: { readonly finalConviction: unknown; readonly action: unknown };
+  /** Options sentiment A-6 (applied runs only): the four appended options cells. */
+  readonly options?: DecisionHistoryOptions | null;
 }
 export interface BuyHistory {
   /** One pass, BEFORE any row is written this run. `todayKey` is the New York day (YYYY-MM-DD). */
@@ -258,7 +262,7 @@ export function workbookHistory(ss: ReportWorkbook, lastRowBaseline = false): Bu
       return out;
     },
     append(rows, nowMs) {
-      for (const x of rows) appendDecisionHistory(ss, x.ticker, x.fundResult, x.techPlan, x.decision, nowMs);
+      for (const x of rows) appendDecisionHistory(ss, x.ticker, x.fundResult, x.techPlan, x.decision, nowMs, x.options);
     },
   };
 }
@@ -466,7 +470,7 @@ export async function runBuyPipeline(deps: BuyPipelineDeps, options: BuyPipeline
     for (const r of sorted) {
       const a = r.raw;
       if (a && a.decision && a.fundResult && a.techPlan) {
-        toWrite.push({ ticker: r.c.ticker, fundResult: { score: a.fundResult.score }, techPlan: { techScore: a.techPlan.techScore }, decision: { finalConviction: a.decision.finalConviction, action: a.decision.action } });
+        toWrite.push({ ticker: r.c.ticker, fundResult: { score: a.fundResult.score }, techPlan: { techScore: a.techPlan.techScore }, decision: { finalConviction: a.decision.finalConviction, action: a.decision.action }, ...(a.optionsHistory ? { options: a.optionsHistory } : {}) });
       }
     }
     const history = deps.history;

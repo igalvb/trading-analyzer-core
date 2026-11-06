@@ -1,0 +1,132 @@
+# Setup Check (a new user, no terminal needed): one table, each key or setting -> ✅ / ❌ / ➖ (not needed) + one plain
+# fix (src/setupCheck.ts). One cheap request per key. It prints NAMES only, never a value; the table goes to the run
+# summary after the leak check. Manual only; read-only (it writes nothing to the sheets). The Profile tab is read first
+# (other users, and every user of the core); a bad tab still gives the table, with the Profile row explaining why.
+name: Setup Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      user:
+        description: 'User id. owner = you (repo secrets; the built-in profile if this copy has one, else your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
+        type: string
+        default: owner
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ (inputs.user || 'owner') == 'owner' && 'setup' || format('setup-{0}', inputs.user) }}
+  cancel-in-progress: false
+
+env:
+  TZ: America/New_York
+  RUN_USER: ${{ inputs.user || 'owner' }}
+  SECRET_PREFIX: ${{ (inputs.user || 'owner') != 'owner' && format('{0}_', inputs.user) || '' }}
+  PROFILE_SOURCE: ${{ (inputs.user || 'owner') != 'owner' && 'sheet' || '' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  setup-check:
+    name: Setup check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies (no dev tools)
+        working-directory: backend
+        run: npm ci --omit=dev --no-audit --no-fund
+
+      - name: Read the user profile tab (not for the default user of a copy with a built-in profile)
+        if: env.PROFILE_SOURCE == 'sheet' || hashFiles('backend/src/owner/profile.ts') == ''
+        continue-on-error: true
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          TELEGRAM_CHAT_ID: ${{ secrets[format('{0}TELEGRAM_CHAT_ID', env.SECRET_PREFIX)] }}
+        run: |
+          mkdir -p out
+          npm run profile-fetch -- --out "$PWD/out/profile.json"
+          echo "PROFILE_FILE=$PWD/out/profile.json" >> "$GITHUB_ENV"
+
+      - name: Run the setup check
+        working-directory: backend
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets[format('{0}GOOGLE_SERVICE_ACCOUNT_JSON', env.SECRET_PREFIX)] }}
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          FMP_API_KEY: ${{ secrets[format('{0}FMP_API_KEY', env.SECRET_PREFIX)] }}
+          ALPHAVANTAGE_KEY: ${{ secrets[format('{0}ALPHAVANTAGE_KEY', env.SECRET_PREFIX)] }}
+          FINNHUB_KEY: ${{ secrets[format('{0}FINNHUB_KEY', env.SECRET_PREFIX)] }}
+          GEMINI_API_KEY: ${{ secrets[format('{0}GEMINI_API_KEY', env.SECRET_PREFIX)] }}
+          ANTHROPIC_API_KEY: ${{ secrets[format('{0}ANTHROPIC_API_KEY', env.SECRET_PREFIX)] }}
+          SEC_CONTACT_EMAIL: ${{ secrets[format('{0}SEC_CONTACT_EMAIL', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          TELEGRAM_CHAT_ID: ${{ secrets[format('{0}TELEGRAM_CHAT_ID', env.SECRET_PREFIX)] }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets[format('{0}TELEGRAM_WEBHOOK_SECRET', env.SECRET_PREFIX)] }}
+        run: |
+          mkdir -p out
+          npm run setup-check 2>&1 | tee out/setup-check.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Check the log for leaked keys
+        if: always()
+        working-directory: backend
+        env:
+          SPREADSHEET_ID: ${{ secrets[format('{0}SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          REPORTS_SPREADSHEET_ID: ${{ secrets[format('{0}REPORTS_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          DATA_SPREADSHEET_ID: ${{ secrets[format('{0}DATA_SPREADSHEET_ID', env.SECRET_PREFIX)] }}
+          FMP_API_KEY: ${{ secrets[format('{0}FMP_API_KEY', env.SECRET_PREFIX)] }}
+          ALPHAVANTAGE_KEY: ${{ secrets[format('{0}ALPHAVANTAGE_KEY', env.SECRET_PREFIX)] }}
+          FINNHUB_KEY: ${{ secrets[format('{0}FINNHUB_KEY', env.SECRET_PREFIX)] }}
+          GEMINI_API_KEY: ${{ secrets[format('{0}GEMINI_API_KEY', env.SECRET_PREFIX)] }}
+          ANTHROPIC_API_KEY: ${{ secrets[format('{0}ANTHROPIC_API_KEY', env.SECRET_PREFIX)] }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets[format('{0}TELEGRAM_BOT_TOKEN', env.SECRET_PREFIX)] }}
+          TELEGRAM_CHAT_ID: ${{ secrets[format('{0}TELEGRAM_CHAT_ID', env.SECRET_PREFIX)] }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets[format('{0}TELEGRAM_WEBHOOK_SECRET', env.SECRET_PREFIX)] }}
+        run: |
+          # The step summary and the artifact are NOT masked like the live log is, so check the file itself.
+          [ -f out/setup-check.log ] || exit 0
+          leaked=0
+          for name in SPREADSHEET_ID REPORTS_SPREADSHEET_ID DATA_SPREADSHEET_ID FMP_API_KEY ALPHAVANTAGE_KEY FINNHUB_KEY GEMINI_API_KEY ANTHROPIC_API_KEY TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID TELEGRAM_WEBHOOK_SECRET; do
+            value="${!name}"
+            if [ "${#value}" -ge 8 ] && grep -qF -- "$value" out/setup-check.log; then
+              echo "::error::The value of $name appears in the run log."
+              leaked=1
+            fi
+          done
+          if grep -q 'PRIVATE KEY-----' out/setup-check.log; then
+            echo "::error::A private key block appears in the run log."
+            leaked=1
+          fi
+          if [ "$leaked" = 1 ]; then
+            rm -f out/setup-check.log
+            echo "The log file was deleted so it is not shown or uploaded."
+            exit 1
+          fi
+
+      - name: Show the table in the run summary
+        if: always()
+        working-directory: backend
+        run: |
+          [ -f out/setup-check.log ] || exit 0
+          {
+            echo "### Setup check"
+            echo
+            grep -E '^(\||[0-9]+ item\(s\) to fix\.|All set\.)' out/setup-check.log || echo "No table: see the log of the step above."
+          } >> "$GITHUB_STEP_SUMMARY"

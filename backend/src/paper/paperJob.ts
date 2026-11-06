@@ -17,10 +17,12 @@ import {
   newPaperState, paperDay, standings, heldList, pctOf, STRATEGIES, STRATEGY_LABEL, PAPER_FIXED_UNIVERSE, PAPER_START, PAPER_END, PAPER_DECIDE_FROM,
   type PaperState, type PaperTrade,
 } from './paperTrading.ts';
-import { PAPER_OWNER_LIST, LAB_SETUPS, LAB_LABEL, LILO_ID, LEAPS_IDS, ALL_ID, JAMES_IDS, JAMES_LEAPS_IDS, labHeld, type LabDayInput, type JamesNightPick } from './paperLab.ts';
+import { PAPER_OWNER_LIST, LAB_SETUPS, LAB_LABEL, LILO_ID, LEAPS_IDS, ALL_ID, JAMES_IDS, JAMES_LEAPS_IDS, OPTIONS_OFF_ID, labHeld, type LabDayInput, type JamesNightPick } from './paperLab.ts';
+import { OPTIONS_READ_APPLIED } from '../analysis/options/nightlyRead.ts';
 import type { LeapsPick, LeapsQuote } from './paperLeaps.ts';
 import { stockNight, logRows, readsRows, valuesRows, appendNight, LOG_TAB, READS_TAB, VALUES_TAB, LOG_HEADER, READS_HEADER, VALUES_HEADER, type StockNight } from './paperLog.ts';
-import { fetchCboeRaw, type CboeDeps, type CboeChainJson } from '../fetch/cboe.ts';
+import { fetchCboeRaw, parseOcc, type CboeDeps, type CboeChainJson } from '../fetch/cboe.ts';
+import { CLAUDE_ID, CLAUDE_PICKS_TAB, CLAUDE_PICKS_HEADER, CLAUDE_QUOTE_NIGHTS, claudeRows, type ClaudeRow, type ClaudeNight } from './paperClaude.ts';
 import { barTimeZone } from '../backtest/data.ts';
 import { recordChainNight } from './chainSnapshot.ts';
 import { selectRecommendedCall } from '../analysis/options/conviction.ts';
@@ -112,6 +114,41 @@ export async function optionsTonight(cboe: CboeDeps, tickers: readonly string[],
   return { quote: (s) => quotes.get(s) ?? null, pick: (t) => picks.get(t) ?? null, nowUnix, chains, picks, jamesPick };
 }
 
+/**
+ * 🤖 Claude, free choice: the '🤖 Claude Picks' rows (the tab is made with its header when missing). Null when the tab
+ * cannot be read (logged): the account waits that run; the other accounts never depend on it.
+ */
+export async function readClaudePicks(store: TabStore, log: (m: string) => void): Promise<{ rows: ClaudeRow[]; raw: TabCell[][] } | null> {
+  const read = async (): Promise<{ rows: ClaudeRow[]; raw: TabCell[][] }> => {
+    if (await store.ensure(CLAUDE_PICKS_TAB)) await store.write(CLAUDE_PICKS_TAB, 1, [CLAUDE_PICKS_HEADER], { header: true });
+    const raw = (await store.read(CLAUDE_PICKS_TAB, CLAUDE_PICKS_HEADER.length)) ?? [];
+    if (!raw.length) await store.write(CLAUDE_PICKS_TAB, 1, [CLAUDE_PICKS_HEADER], { header: true });
+    return { rows: claudeRows(raw), raw };
+  };
+  return read().catch((e: unknown) => { log('⚠️ paper test: ' + CLAUDE_PICKS_TAB + ' could not be read (that account waits this run): ' + String(e)); return null; });
+}
+
+/** A call's quote in a Cboe chain: null = no chain, 'missing' = no such contract in it. */
+export function callQuoteIn(json: CboeChainJson | null | undefined, strike: number, expiry: string): LeapsQuote | 'missing' | null {
+  if (!json) return null;
+  for (const o of json.data?.options ?? []) {
+    if (!o.option) continue;
+    const p = parseOcc(String(o.option));
+    if (p.side === 'call' && Math.abs(p.strike - strike) < 0.001 && new Date(p.expUnix * 1000).toISOString().slice(0, 10) === expiry) return { bid: Number(o.bid) || 0, ask: Number(o.ask) || 0 };
+  }
+  return 'missing';
+}
+
+/** Tonight's chains for the stocks of Claude's calls (the list's already fetched are reused; a failed fetch = no chain). */
+async function claudeChains(cboe: CboeDeps, tickers: readonly string[], have: ReadonlyMap<string, CboeChainJson | null> | undefined, log: (m: string) => void): Promise<Map<string, CboeChainJson | null>> {
+  const out = new Map<string, CboeChainJson | null>();
+  for (const t of tickers) {
+    if (have?.has(t)) { out.set(t, have.get(t) ?? null); continue; }
+    out.set(t, await fetchCboeRaw(cboe, t).catch((e: unknown) => { log('⚠️ paper test: no option chain for ' + t + ' (' + CLAUDE_ID + '): ' + String(e)); return null; }));
+  }
+  return out;
+}
+
 /** The whole state plus every trade so far (for the tab). */
 export interface StoredPaper { state: PaperState; trades: PaperTrade[] }
 
@@ -128,6 +165,17 @@ export async function savePaper(store: TabStore, p: StoredPaper): Promise<void> 
   await store.ensure(PAPER_STATE_TAB);
   await store.clear(PAPER_STATE_TAB);
   await store.write(PAPER_STATE_TAB, 1, rows);
+}
+
+/** Rewrites the rows whose Status changed (the row's own cells A-I as read, the Status in J). */
+async function writeClaudeStatus(store: TabStore, picks: { rows: ClaudeRow[]; raw: TabCell[][] }, book: { done: Record<string, string>; waits: Record<string, number> }): Promise<void> {
+  for (const r of picks.rows) {
+    const w = book.waits[r.key];
+    const status = book.done[r.key] ?? (w != null ? 'WAITING: no option quote yet (night ' + w + ' of ' + CLAUDE_QUOTE_NIGHTS + ')' : null);
+    if (status == null || status === r.status) continue;
+    const raw = picks.raw[r.row - 1] ?? [];
+    await store.write(CLAUDE_PICKS_TAB, r.row, [[...Array.from({ length: 9 }, (_, c) => raw[c] ?? ''), status]]);
+  }
 }
 
 const nyDay = (d: Date, tz: string): string => d.toLocaleDateString('en-CA', { timeZone: tz });
@@ -165,7 +213,7 @@ export function paperTabRows(p: StoredPaper): TabCell[][] {
     [],
     ['Holdings now'],
     ...STRATEGIES.map((id) => [STRATEGY_LABEL[id], heldList(s, id).join(', ') || 'cash'] as TabCell[]),
-    ...(s.lab ? [...LAB_SETUPS.map((st) => st.id), LILO_ID, ...LEAPS_IDS, ALL_ID, ...JAMES_IDS, ...JAMES_LEAPS_IDS].map((id) => [LAB_LABEL[id], labHeld(s.lab!, id).join(', ') || 'cash'] as TabCell[]) : []),
+    ...(s.lab ? [...LAB_SETUPS.map((st) => st.id), ...(s.lab.accounts[OPTIONS_OFF_ID] ? [OPTIONS_OFF_ID] : []), LILO_ID, ...LEAPS_IDS, ALL_ID, ...JAMES_IDS, ...JAMES_LEAPS_IDS, ...(s.lab.claude?.joined ? [CLAUDE_ID] : [])].map((id) => [LAB_LABEL[id], labHeld(s.lab!, id).join(', ') || 'cash'] as TabCell[]) : []),
     [],
     ['Trades, newest first', '', '', '', '', '', '', ''],
     ['Day', 'Strategy', 'Side', 'Ticker', 'Shares', 'Price', 'Tax', 'Why'],
@@ -244,10 +292,20 @@ export async function runPaperNight(d: PaperJobDeps): Promise<string> {
   const missed = todo.filter((x) => x !== day);
   if (missed.length) d.log('paper test: catching up ' + missed.length + ' missed trading day(s): ' + missed.join(', '));
 
+  // 🤖 Claude, free choice: its order rows, and the stocks it holds or orders (their charts and, for calls, chains)
+  const picks = await readClaudePicks(d.store, d.log);
+  const book = stored.state.lab?.claude;
+  const claudeOpen = (picks?.rows ?? []).filter((r) => r.order && !book?.done[r.key]).map((r) => r.order!);
+  const claudeHeldPos = Object.values(book?.pos ?? {});
+  const claudeStocks = [...new Set([...claudeOpen.map((o) => o.ticker), ...claudeHeldPos.map((p) => p.ticker)])].sort();
+  const claudeCalls = [...new Set([...claudeOpen.filter((o) => o.kind === 'call').map((o) => o.ticker), ...claudeHeldPos.filter((p) => p.kind === 'call').map((p) => p.ticker)])].sort();
+
   const series = new Map<string, PriceSeries>();
   const held = new Set(STRATEGIES.flatMap((id) => heldList(stored.state, id)));
-  for (const t of [...new Set([...universe, ...stored.state.basketUniverse, ...held, ...PAPER_OWNER_LIST, 'QQQ'])]) {
-    const c = t === 'QQQ' ? qqq : await d.fetchChart(t);
+  const known = new Set([...universe, ...stored.state.basketUniverse, ...held, ...PAPER_OWNER_LIST, 'QQQ']);
+  for (const t of [...known, ...claudeStocks.filter((x) => !known.has(x))]) {
+    // a stock only Claude's account wants: a failed fetch only means its order cannot be priced
+    const c = t === 'QQQ' ? qqq : known.has(t) ? await d.fetchChart(t) : await d.fetchChart(t).catch((e: unknown) => { d.log('⚠️ paper test: no chart for ' + t + ' (' + CLAUDE_ID + '): ' + String(e)); return null; });
     if (!c) continue;
     series.set(t, t === 'QQQ' ? qqqSeries : seriesFromChart(t, c, d.timeZone));
   }
@@ -265,6 +323,7 @@ export async function runPaperNight(d: PaperJobDeps): Promise<string> {
   const allTrades: PaperTrade[] = [];
   let bars: Record<string, { open: number; close: number }> = {};
   let options: OptionsTonight | null = null;
+  let chainsForClaude = new Map<string, CboeChainJson | null>();
   const filled: string[] = [], skipped: string[] = [];
   for (const x of todo) {
     const tonight = x === day;
@@ -281,6 +340,7 @@ export async function runPaperNight(d: PaperJobDeps): Promise<string> {
       for (const t of PAPER_OWNER_LIST) listReads.push(reads.find((r) => r.ticker === t) ?? engineReadOf(await d.analysis(t), t, x, bx[t]?.close ?? null));
       // The option chains are tonight's only: on a missed day the LEAPS accounts wait, as on a night Cboe fails.
       options = d.cboe ? await optionsTonight(d.cboe, PAPER_OWNER_LIST, nowMs, d.log, d.timeZone) : null;
+      if (d.cboe && picks && claudeCalls.length) chainsForClaude = await claudeChains(d.cboe, claudeCalls, options?.chains, d.log);
     } else {
       const got = await readsAt(sx, x, allTickers).then((r) => ({ ok: true as const, r }), (e: unknown) => ({ ok: false as const, e }));
       if (!got.ok) { d.log('paper test: no engine reads for the missed day ' + x + ', skipped: ' + String(got.e)); skipped.push(x); continue; }
@@ -289,10 +349,15 @@ export async function runPaperNight(d: PaperJobDeps): Promise<string> {
       reads = universe.map((t) => by.get(t)).filter((r): r is EngineRead => !!r);
       listReads = PAPER_OWNER_LIST.map((t) => by.get(t)).filter((r): r is EngineRead => !!r);
     }
+    // 🤖 Claude, free choice: shares at this day's open (any ticker's chart), calls at tonight's Cboe quote (none on a missed day)
+    const claude: Omit<ClaudeNight, 'day' | 'fill'> | null = picks ? {
+      rows: picks.rows, tradingDays: qqqSeries.dates, bar: (t) => bx[t] ?? null,
+      quote: (t, strike, expiry) => (tonight ? callQuoteIn(chainsForClaude.get(t), strike, expiry) : null),
+    } : null;
     const trades = paperDay(stored.state, {
       day: x, bars: bx, reads,
       exitRead: (t, entryDate, entryPrice) => exitReadFor(sx.get(t) as PriceSeries, x, entryDate, entryPrice),
-      lab: { reads: listReads, series: sx, options: tonight ? options : null, ...(lx.size ? { long: lx } : {}) },
+      lab: { reads: listReads, series: sx, options: tonight ? options : null, ...(lx.size ? { long: lx } : {}), ...(tonight && OPTIONS_READ_APPLIED ? { optionsApplied: true } : {}), ...(claude ? { claude } : {}) },
     });
     stored.trades.push(...trades);
     allTrades.push(...trades);
@@ -316,6 +381,8 @@ export async function runPaperNight(d: PaperJobDeps): Promise<string> {
     } catch (e) { d.log('option snapshot failed (the paper night goes on): ' + String(e)); }
   }
   await savePaper(d.store, stored);
+  // 🤖 Claude, free choice: each order's Status back into its row (after the state, which is what keeps an order from filling twice)
+  if (picks && stored.state.lab?.claude) await writeClaudeStatus(d.store, picks, stored.state.lab.claude).catch((e: unknown) => d.log('⚠️ paper test: the ' + CLAUDE_PICKS_TAB + ' Status column could not be written: ' + String(e)));
   await d.store.ensure(PAPER_TAB);
   await d.store.clear(PAPER_TAB);
   await d.store.write(PAPER_TAB, 1, paperTabRows(stored));

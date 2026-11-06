@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runSetupCheck, formatRows, type SetupCheckDeps } from '../src/setupCheck.ts';
+import { runSetupCheck, formatRows, countWatchlistRows, WATCHLIST_TAB, MIN_CORE_TICKERS, type SetupCheckDeps } from '../src/setupCheck.ts';
+import { Tabs } from '../src/sheets/tabs.ts';
 
 const SA = JSON.stringify({ client_email: 'robot-at-example', private_key: '-----FAKE-----zzqq' });
 const GOOD_ENV: Record<string, string> = {
@@ -35,6 +36,7 @@ function deps(env: Record<string, string>, over: Partial<SetupCheckDeps> = {}): 
   return {
     env, fetchImpl: fakeFetch(), aiOn: true, out: () => {},
     sheetTitle: async (_c, id) => { if (id.startsWith('bad')) throw new Error('403'); return 'T'; },
+    watchlistCount: async () => 12,
     ...over,
   };
 }
@@ -53,7 +55,7 @@ test('all keys right: every row ✅, exit 0, no value printed', async () => {
   const { rows, code } = await runSetupCheck(deps(GOOD_ENV));
   assert.equal(code, 0);
   assert.deepEqual(rows.filter((r) => r.mark !== '✅').map((r) => r.item), []);
-  assert.equal(rows.length, 13);
+  assert.equal(rows.length, 14);
   const lines = formatRows(rows);
   assert.equal(lines.at(-1), 'All set.');
   leakCheck(lines, GOOD_ENV);
@@ -103,8 +105,66 @@ test('a network failure is ❌ "could not reach", not a crash', async () => {
 
 test('profile row: valid, paper on without a start date, invalid', async () => {
   const row = async (profile: SetupCheckDeps['profile']) => (await runSetupCheck(deps(GOOD_ENV, { profile }))).rows.find((r) => r.item === 'Profile');
-  assert.equal((await row({ ok: true, paperOn: true, paperStart: '2026-11-02', source: 'built-in' }))?.mark, '✅');
-  assert.equal((await row({ ok: true, paperOn: true, paperStart: null, source: 'PROFILE_FILE' }))?.mark, '❌');
-  assert.equal((await row({ ok: true, paperOn: false, paperStart: null, source: 'PROFILE_FILE' }))?.mark, '✅');
+  const n = { coreCount: 12, fixedUniverseCount: 6 };
+  assert.equal((await row({ ok: true, paperOn: true, paperStart: '2026-11-02', source: 'built-in', ...n }))?.mark, '✅');
+  assert.equal((await row({ ok: true, paperOn: true, paperStart: null, source: 'PROFILE_FILE', ...n }))?.mark, '❌');
+  assert.equal((await row({ ok: true, paperOn: false, paperStart: null, source: 'PROFILE_FILE', ...n }))?.mark, '✅');
   assert.equal((await row({ ok: false, error: 'tax.rate is required' }))?.mark, '❌');
 });
+
+// Owner 2026-11-06: a new user must choose their stocks, or most paper accounts sit idle.
+const P = (over: Partial<{ paperOn: boolean; coreCount: number; fixedUniverseCount: number }> = {}): SetupCheckDeps['profile'] =>
+  ({ ok: true, paperOn: true, paperStart: '2026-11-02', source: 'PROFILE_TAB', coreCount: 12, fixedUniverseCount: 6, ...over });
+const rowOf = async (over: Partial<SetupCheckDeps>, item: string, env: Record<string, string> = GOOD_ENV) =>
+  (await runSetupCheck(deps(env, over))).rows.find((r) => r.item === item);
+
+test('lists.core row: empty ❌, under 3 ❌, 3+ ✅; the fix names the Profile tab and the guide step', async () => {
+  const empty = await rowOf({ profile: P({ coreCount: 0 }) }, 'Profile lists.core');
+  assert.equal(empty?.mark, '❌');
+  assert.match(empty?.note ?? '', /^Empty\..*⚙️ Profile.*Choose your stocks/);
+  const short = await rowOf({ profile: P({ coreCount: MIN_CORE_TICKERS - 1 }) }, 'Profile lists.core');
+  assert.equal(short?.mark, '❌');
+  assert.match(short?.note ?? '', /^Only 2 ticker\(s\)\./);
+  assert.equal((await rowOf({ profile: P({ coreCount: MIN_CORE_TICKERS }) }, 'Profile lists.core'))?.mark, '✅');
+  const { code } = await runSetupCheck(deps(GOOD_ENV, { profile: P({ coreCount: 1 }) }));
+  assert.equal(code, 1);
+  assert.equal((await rowOf({ profile: { ok: false, error: 'x' } }, 'Profile lists.core'))?.mark, '➖');
+});
+
+test('paper.fixedUniverse row: empty with paper on ❌, paper off ➖, filled ✅', async () => {
+  const empty = await rowOf({ profile: P({ fixedUniverseCount: 0 }) }, 'Profile paper.fixedUniverse');
+  assert.equal(empty?.mark, '❌');
+  assert.match(empty?.note ?? '', /paper\.fixedUniverse.*Choose your stocks/);
+  assert.equal((await rowOf({ profile: P({ fixedUniverseCount: 0, paperOn: false }) }, 'Profile paper.fixedUniverse'))?.mark, '➖');
+  assert.equal((await rowOf({ profile: P({ fixedUniverseCount: 1 }) }, 'Profile paper.fixedUniverse'))?.mark, '✅');
+  assert.equal((await rowOf({ profile: { ok: false, error: 'x' } }, 'Profile paper.fixedUniverse'))?.mark, '➖');
+});
+
+test('🎯 Watchlist row: empty ❌, no tab ❌, filled ✅ (count only), ➖ when the robot or sheet row failed', async () => {
+  const WL = WATCHLIST_TAB + ' tab';
+  assert.equal(WATCHLIST_TAB, Tabs.WATCHLIST);
+  const empty = await rowOf({ watchlistCount: async () => 0 }, WL);
+  assert.equal(empty?.mark, '❌');
+  assert.match(empty?.note ?? '', /No tickers.*column A.*Choose your stocks/);
+  assert.equal((await rowOf({ watchlistCount: async () => null }, WL))?.mark, '❌');
+  const good = await rowOf({ watchlistCount: async () => 3 }, WL);
+  assert.equal(good?.mark, '✅');
+  assert.equal(good?.note, '3 ticker(s).');
+  let asked = 0;
+  const count = async () => { asked++; return 5; };
+  assert.equal((await rowOf({ watchlistCount: count }, WL, { ...GOOD_ENV, GOOGLE_SERVICE_ACCOUNT_JSON: 'hello' }))?.mark, '➖');
+  assert.equal((await rowOf({ watchlistCount: count }, WL, { ...GOOD_ENV, SPREADSHEET_ID: 'badSHEET000' }))?.mark, '➖');
+  const noId = { ...GOOD_ENV }; delete noId['SPREADSHEET_ID'];
+  assert.equal((await rowOf({ watchlistCount: count }, WL, noId))?.mark, '➖');
+  assert.equal(asked, 0);
+  const boom = await rowOf({ watchlistCount: async () => { throw new Error('down'); } }, WL);
+  assert.equal(boom?.mark, '❌');
+});
+
+test('countWatchlistRows: header skipped, blanks skipped, duplicates and case folded', () => {
+  assert.equal(countWatchlistRows([]), 0);
+  assert.equal(countWatchlistRows([['Ticker']]), 0);
+  assert.equal(countWatchlistRows([['Ticker'], [''], ['  ']]), 0);
+  assert.equal(countWatchlistRows([['Ticker'], ['zzqa'], ['ZZQA '], ['ZZQB'], []]), 2);
+});
+

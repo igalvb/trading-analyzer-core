@@ -9,7 +9,8 @@
  * After fixing violations, lower the baseline (it refuses to raise any count):
  *   GENERIC_GUARD_WRITE=1 node --test test/genericGuard.test.ts
  *
- * Scopes ("core src" = backend/src minus src/owner/, the owner overlay):
+ * Scopes (only core paths, core-manifest.json: a private overlay is never scanned for owner data; "core src" =
+ * backend/src minus src/owner/):
  *   R1 sheet IDs, R2 owner identity    core src, core tests, workflows, relay
  *   R3 owner lists (hashes)            core src, relay
  *   R4 ticker lists of 8+              core src, minus market reference data (dark pool groups, macro tickers)
@@ -25,6 +26,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { PROFILE_KEYS } from '../src/profile/schema.ts';
+import { isCorePath } from '../scripts/coreManifest.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..', '..');
 const BASELINE_PATH = path.join(import.meta.dirname, 'genericGuard.baseline.json');
@@ -79,10 +81,10 @@ function repoFiles(): string[] {
   }).sort();
 }
 
-const isCoreSrc = (f: string): boolean => f.startsWith('backend/src/') && !f.startsWith('backend/src/owner/') && /\.(ts|mjs|js)$/.test(f);
-const isCoreTest = (f: string): boolean => f.startsWith('backend/test/') && /\.(ts|mjs|js)$/.test(f);
-const isWorkflow = (f: string): boolean => f.startsWith('.github/workflows/');
-const isRelay = (f: string): boolean => f.startsWith('relay/');
+const isCoreSrc = (f: string): boolean => f.startsWith('backend/src/') && !f.startsWith('backend/src/owner/') && /\.(ts|mjs|js)$/.test(f) && isCorePath(f);
+const isCoreTest = (f: string): boolean => f.startsWith('backend/test/') && /\.(ts|mjs|js)$/.test(f) && isCorePath(f);
+const isWorkflow = (f: string): boolean => f.startsWith('.github/workflows/') && isCorePath(f);
+const isRelay = (f: string): boolean => f.startsWith('relay/') && isCorePath(f);
 
 export type Counts = Record<string, Record<string, number>>;
 export interface Hit { readonly rule: string; readonly file: string; readonly line: number }

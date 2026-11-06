@@ -4,6 +4,8 @@
  * Exit: 0 every needed item ✅, 1 something needed is ❌.
  *
  * Optional items (AI keys when features.ai is off, the Anthropic key) show ➖ when absent.
+ * "Choose your stocks" rows: the 🎯 Watchlist tab has tickers, the Profile `lists.core` has 3+, and (paper test on)
+ * `paper.fixedUniverse` is not empty. Counts only, never the tickers.
  */
 
 import { processLine } from './core/logFile.ts';
@@ -20,12 +22,33 @@ export interface SetupCheckDeps {
   readonly sheetTitle: (credentialsJson: string, spreadsheetId: string) => Promise<string>;
   /** features.ai of the run's profile (AI keys are optional when off). */
   readonly aiOn: boolean;
-  /** The run's profile, or the one-line reason it is not valid. */
-  readonly profile?: { readonly ok: true; readonly paperOn: boolean; readonly paperStart: string | null; readonly source: string } | { readonly ok: false; readonly error: string };
+  /**
+   * Counts the tickers in the 🎯 Watchlist tab (column A under the header, distinct) with the robot key; null when
+   * the tab is not there yet; throws on no access. Only the count leaves it.
+   */
+  readonly watchlistCount: (credentialsJson: string, spreadsheetId: string) => Promise<number | null>;
+  /** The run's profile (with the sizes of its stock lists, never the tickers), or the one-line reason it is not valid. */
+  readonly profile?: {
+    readonly ok: true; readonly paperOn: boolean; readonly paperStart: string | null; readonly source: string;
+    /** How many tickers in `lists.core` and `paper.fixedUniverse`. */
+    readonly coreCount: number; readonly fixedUniverseCount: number;
+  } | { readonly ok: false; readonly error: string };
   readonly out: (line: string) => void;
 }
 
 const TIMEOUT_MS = 15_000;
+/** The 'your list' paper accounts need at least this many tickers in `lists.core` to mean anything. */
+export const MIN_CORE_TICKERS = 3;
+/** Same name as sheets/tabs.ts Tabs.WATCHLIST (not imported: that module reads the profile when loaded). */
+export const WATCHLIST_TAB = '🎯 Watchlist';
+const CHOOSE = ' (SETUP_GUIDE "Choose your stocks").';
+
+/** Distinct tickers in column A under the header row (same rule as sheets/readers/watchlist.ts parseWatchlistRows). */
+export function countWatchlistRows(rows: ReadonlyArray<ReadonlyArray<unknown>>): number {
+  const seen = new Set<string>();
+  for (let r = 1; r < rows.length; r++) { const t = String(rows[r]?.[0] ?? '').trim().toUpperCase(); if (t) seen.add(t); }
+  return seen.size;
+}
 
 async function getJson(f: typeof fetch, url: string, headers: Record<string, string> = {}): Promise<{ status: number; body: unknown }> {
   const ctl = new AbortController();
@@ -72,6 +95,15 @@ export async function runSetupCheck(d: SetupCheckDeps): Promise<{ rows: CheckRow
       catch { return bad(k, 'The robot cannot open it. Check the id, and share the sheet with the robot e-mail as Editor (SETUP_GUIDE P-4).'); }
     }));
   }
+
+  // Your stocks, part 1: the 🎯 Watchlist tab (Buy report candidates; also joins the paper 'A original' universe).
+  const WL = WATCHLIST_TAB + ' tab';
+  if (rows.find((r) => r.item === 'SPREADSHEET_ID')?.mark !== '✅') rows.push(skip(WL, 'Cannot read it until the robot key and SPREADSHEET_ID rows are ✅.'));
+  else rows.push(await guarded(WL, async () => {
+    const n = await d.watchlistCount(sa, has(e, 'SPREADSHEET_ID'));
+    if (n === null) return bad(WL, 'The tab is not there yet. Run "Init user sheets", then type your buy candidates in column A' + CHOOSE);
+    return n > 0 ? ok(WL, n + ' ticker(s).') : bad(WL, 'No tickers. Type your buy candidates in column A under the header (the Buy report reads them)' + CHOOSE);
+  }));
 
   // Data keys.
   const fmp = has(e, 'FMP_API_KEY');
@@ -137,6 +169,18 @@ export async function runSetupCheck(d: SetupCheckDeps): Promise<{ rows: CheckRow
     if (!pr.ok) rows.push(bad('Profile', pr.error));
     else if (pr.paperOn && !pr.paperStart) rows.push(bad('Profile', 'Paper test is on but paper.start is empty. Set it to the next trading day (YYYY-MM-DD) in the ⚙️ Profile tab.'));
     else rows.push(ok('Profile', 'Valid (' + pr.source + ').'));
+
+    // Your stocks, part 2: the Profile lists (counts only).
+    const CORE = 'Profile lists.core', FIXED = 'Profile paper.fixedUniverse';
+    if (!pr.ok) { rows.push(skip(CORE, 'Fix the Profile row first.')); rows.push(skip(FIXED, 'Fix the Profile row first.')); }
+    else {
+      const c = pr.coreCount;
+      rows.push(c >= MIN_CORE_TICKERS ? ok(CORE, c + ' ticker(s).')
+        : bad(CORE, (c === 0 ? 'Empty.' : 'Only ' + c + ' ticker(s).') + ' Put ' + MIN_CORE_TICKERS + '+ tickers (10-20 is typical) in lists.core in the ⚙️ Profile tab: the paper \'your list\' accounts trade them' + CHOOSE));
+      if (!pr.paperOn) rows.push(skip(FIXED, 'Not needed: the paper test is off in your profile.'));
+      else rows.push(pr.fixedUniverseCount > 0 ? ok(FIXED, pr.fixedUniverseCount + ' ticker(s).')
+        : bad(FIXED, 'Empty. Put your tickers in paper.fixedUniverse in the ⚙️ Profile tab (or remove the row to use lists.core): the paper \'A original\' accounts trade them' + CHOOSE));
+    }
   }
 
   const code = rows.some((r) => r.mark === '❌') ? 1 : 0;
@@ -152,6 +196,16 @@ export function formatRows(rows: readonly CheckRow[]): string[] {
   return out;
 }
 
+async function googleWatchlistCount(credentialsJson: string, spreadsheetId: string): Promise<number | null> {
+  const { google } = await import('googleapis');
+  const auth = new google.auth.GoogleAuth({ credentials: JSON.parse(credentialsJson), scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'] });
+  const api = google.sheets({ version: 'v4', auth });
+  const meta = await api.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties.title' });
+  if (!(meta.data.sheets ?? []).some((sh) => sh.properties?.title === WATCHLIST_TAB)) return null;
+  const res = await api.spreadsheets.values.get({ spreadsheetId, range: "'" + WATCHLIST_TAB + "'!A:A" });
+  return countWatchlistRows(res.data.values ?? []);
+}
+
 async function googleSheetTitle(credentialsJson: string, spreadsheetId: string): Promise<string> {
   const { google } = await import('googleapis');
   const auth = new google.auth.GoogleAuth({ credentials: JSON.parse(credentialsJson), scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'] });
@@ -162,9 +216,12 @@ async function googleSheetTitle(credentialsJson: string, spreadsheetId: string):
 if (import.meta.url === `file://${process.argv[1]}`) {
   const out = (l: string): void => { process.stdout.write(l + '\n'); };
   const profile = ((): SetupCheckDeps['profile'] => {
-    try { const p = activeProfile(); return { ok: true, paperOn: p.features.paper, paperStart: p.paper.start ?? null, source: activeProfileSource() }; }
+    try {
+      const p = activeProfile();
+      return { ok: true, paperOn: p.features.paper, paperStart: p.paper.start ?? null, source: activeProfileSource(), coreCount: p.lists.core.length, fixedUniverseCount: p.paper.fixedUniverse.length };
+    }
     catch (e) { return { ok: false, error: String((e as Error).message ?? e) }; }
   })();
-  runSetupCheck({ env: process.env, fetchImpl: fetch, sheetTitle: googleSheetTitle, aiOn: profile?.ok ? activeProfile().features.ai : false, profile, out })
+  runSetupCheck({ env: process.env, fetchImpl: fetch, sheetTitle: googleSheetTitle, watchlistCount: googleWatchlistCount, aiOn: profile?.ok ? activeProfile().features.ai : false, profile, out })
     .then(({ rows, code }) => { formatRows(rows).forEach(out); finish(code); }, (e: unknown) => { out('Setup check: unexpected failure.'); processLine('CRITICAL', 'setup', 'setup check stopped on an unexpected error (exit 1)', { detail: String(e) }); finish(1); });
 }

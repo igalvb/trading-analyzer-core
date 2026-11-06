@@ -3,8 +3,9 @@
  * sheet, checks it (profile/schema.ts) and writes it as JSON to <file>; the workflow then sets PROFILE_FILE to it, so
  * every later step of the run uses that user's profile (profile/active.ts).
  *
- * The per-user workflows run this step ONLY for users other than the owner (`if: env.PROFILE_SOURCE == 'sheet'`):
- * the owner keeps the built-in profile and makes no extra sheet request (recordings and goldens unchanged).
+ * The per-user workflows run this step for every user except the default user of a copy with a built-in profile
+ * (workflows/schedule.ts PROFILE_STEP_IF, src/overlay.ts): that one keeps the built-in profile and makes no extra sheet
+ * request (recordings and goldens unchanged).
  *
  * A missing or bad tab refuses the run with one plain line (stdout, and Telegram when the bot secrets are given).
  * The service-account value and the sheet ID are never printed.
@@ -17,7 +18,7 @@ import { pathToFileURL } from 'node:url';
 import { finish } from './core/finish.ts';
 import { createSheetsApi, parseServiceAccount } from './sheets/serviceAccount.ts';
 import { PROFILE_TAB, loadProfile, profileInputFromRows } from './profile/load.ts';
-import { runUserOf, runUserProblem } from './profile/runUser.ts';
+import { OWNER_USER, runUserOf, runUserProblem } from './profile/runUser.ts';
 import { sendMessage } from './notify/telegram.ts';
 import { processLine } from './core/logFile.ts';
 
@@ -94,7 +95,8 @@ export async function profileFetch(deps: ProfileFetchDeps): Promise<number> {
   // Only the tab counts here: PROFILE_JSON / PROFILE_FILE of the step's own environment are ignored.
   const r = loadProfile({}, { sheetRows });
   if (!r.ok) return refuse('the ' + PROFILE_TAB + ' tab is not valid: ' + r.errors.join('; ') + '.');
-  if (r.profile.user.id !== user) return refuse('the ' + PROFILE_TAB + ' tab is for user ' + r.profile.user.id + ', not ' + user + ' (user.id).');
+  // The default user's tab may carry any valid id (a single-user copy); another user's tab must name that user.
+  if (user !== OWNER_USER && r.profile.user.id !== user) return refuse('the ' + PROFILE_TAB + ' tab is for user ' + r.profile.user.id + ', not ' + user + ' (user.id).');
   const write = deps.writeFile ?? ((f: string, t: string) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, t); });
   write(file, JSON.stringify(input, null, 2) + '\n');
   deps.out('Profile: user ' + user + ', ' + r.profile.lists.core.length + ' ticker(s) on the list, read from the ' + PROFILE_TAB + ' tab.');

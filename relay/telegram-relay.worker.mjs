@@ -37,8 +37,12 @@
  * (analyze.yml defaults it to false) and /exit sends none (send-exit.yml defaults it to false).
  */
 
+/** Defaults for REPO and TICKERS: empty in the shared code (both settings are required). A private copy may build
+ *  its own file with them filled in; nothing else differs. */
+const DEFAULT_REPO = '';
 /** Bumped on every change, so the live version can be checked (a GET on the relay answers with it). */
-export const RELAY_VERSION = '2026-11-05.2';
+export const RELAY_VERSION = '2026-11-06.1';
+const DEFAULT_TICKERS = [];
 /** The owner's user id (the workflows' default `user`). */
 export const OWNER_USER = 'owner';
 /** A user id that is also a GitHub secret prefix (same rule as backend/src/profile/runUser.ts). */
@@ -61,13 +65,13 @@ const cleanTickers = (list) => list.map((t) => String(t).trim().toUpperCase()).f
 
 export function tickersOf(env) {
   const list = cleanTickers(String(env.TICKERS || '').split(','));
-  return list; // no default: TICKERS is a required setting
+  return list.length ? list : DEFAULT_TICKERS;
 }
 
-/** The GitHub repo the runs start in: REPO ("owner/name") when set and well formed, else '' (nothing starts). */
+/** The GitHub repo the runs start in: REPO ("owner/name") when set and well formed, else DEFAULT_REPO ('' = nothing starts). */
 export function repoOf(env) {
   const r = String(env.REPO || '').trim();
-  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(r) ? r : '';
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(r) ? r : DEFAULT_REPO;
 }
 
 /** The required settings that are missing or malformed (REPO, TICKERS), for the status page and the refusals. */

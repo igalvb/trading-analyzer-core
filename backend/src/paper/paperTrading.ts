@@ -22,8 +22,9 @@ import type { EngineRead, ExitReadResult } from '../backtest/engineRun.ts';
 import type { StageMemory } from '../portfolio/sellPlan.ts';
 import { EXIT_TAX_RATE, computeExitTax } from '../portfolio/exitTax.ts';
 import type { PriceSeries } from '../backtest/data.ts';
-import { labDay, labValues, newLabState, LAB_SETUPS, PAPER_OWNER_LIST, LILO_ID, LILO_LABEL, LEAPS_IDS, LAB_LABEL, PAPER_RESEARCH_14, PAPER_ADDED, ALL_ID, ALL_LABEL, ALL_SHARES, JAMES_IDS, JAMES_LEAPS_IDS, JAMES_LILO_V2_ID, JAMES_MR_ID, labHeld, type LabState, type LabDayInput } from './paperLab.ts';
+import { labDay, labValues, newLabState, LAB_SETUPS, PAPER_OWNER_LIST, LILO_ID, LILO_LABEL, LEAPS_IDS, LAB_LABEL, PAPER_RESEARCH_14, PAPER_ADDED, ALL_ID, ALL_LABEL, ALL_SHARES, JAMES_IDS, JAMES_LEAPS_IDS, JAMES_LILO_V2_ID, JAMES_MR_ID, OPTIONS_OFF_SETUPS, labHeld, type LabState, type LabDayInput } from './paperLab.ts';
 import { liloHeld } from '../research/liloBook.ts';
+import { CLAUDE_ID, CLAUDE_LABEL } from './paperClaude.ts';
 import { activeProfile } from '../profile/active.ts';
 import { paperDatesOf } from '../profile/paperDates.ts';
 import { LABELS } from '../profile/labels.ts';
@@ -106,7 +107,7 @@ export interface PaperDayInput {
   /** The engine's exit read for a held position (live chart). */
   readonly exitRead: (ticker: string, entryDate: string, entryPrice: number) => ExitReadResult;
   /** The research accounts' inputs: tonight's reads for the owner's list and its price history. */
-  readonly lab?: { readonly reads: readonly EngineRead[]; readonly series: ReadonlyMap<string, PriceSeries>; readonly options?: LabDayInput['options']; readonly long?: ReadonlyMap<string, PriceSeries> };
+  readonly lab?: { readonly reads: readonly EngineRead[]; readonly series: ReadonlyMap<string, PriceSeries>; readonly options?: LabDayInput['options']; readonly long?: ReadonlyMap<string, PriceSeries>; readonly optionsApplied?: boolean; readonly claude?: LabDayInput['claude'] };
 }
 
 const sharesOf = (a: Account, t: string): number => (a.lots[t] ?? []).reduce((x, l) => x + l.shares, 0);
@@ -236,7 +237,7 @@ export function paperDay(state: PaperState, input: PaperDayInput): PaperTrade[] 
   // Research accounts: they decide from the day they join; their first fills are at the next open.
   if (input.lab) {
     state.lab ??= newLabState(d, state.cash);
-    trades.push(...labDay(state.lab, { day: d, bars: input.bars, reads: input.lab.reads, series: input.lab.series, exitRead: input.exitRead, options: input.lab.options ?? null, ...(input.lab.long ? { long: input.lab.long } : {}) },
+    trades.push(...labDay(state.lab, { day: d, bars: input.bars, reads: input.lab.reads, series: input.lab.series, exitRead: input.exitRead, options: input.lab.options ?? null, ...(input.lab.long ? { long: input.lab.long } : {}), ...(input.lab.optionsApplied ? { optionsApplied: true } : {}), ...(input.lab.claude ? { claude: input.lab.claude } : {}) },
       { fill: !before && d > state.lab.joined, decide: d < state.end, cash: state.cash }));
   }
 
@@ -274,6 +275,8 @@ export function accountIds(state: PaperState): string[] {
     if (lab.cycle) ids.push('james.cycle');
     if (lab.cycleBtc) ids.push('james.cycleBtc');
     if (lab.marketMaker) ids.push('james.marketMaker');
+    // 🤖 Claude, free choice: from its first fill
+    if (lab.claude?.joined) ids.push(CLAUDE_ID);
   }
   return [...new Set(ids)];
 }
@@ -330,7 +333,7 @@ export function standings(state: PaperState): Array<{ key: string; name: string;
   const rows: Array<{ key: string; name: string; positions: number; bench: boolean }> = STRATEGIES.map((s) => ({ key: s, name: STRATEGY_LABEL[s], positions: held(state.accounts[s]).length, bench: false }));
   rows.push({ key: 'qqq', name: 'Hold QQQ', positions: 1, bench: true });
   rows.push({ key: 'basket', name: 'Hold all ' + state.basketUniverse.length + ' equally (4 + watchlist)', positions: state.basketUniverse.length, bench: true });
-  for (const st of LAB_SETUPS) rows.push({ key: st.id, name: st.label, positions: Object.keys(state.lab?.accounts[st.id]?.pos ?? {}).filter((t) => t !== 'QQQ').length, bench: false });
+  for (const st of [...LAB_SETUPS, ...OPTIONS_OFF_SETUPS]) rows.push({ key: st.id, name: st.label, positions: Object.keys(state.lab?.accounts[st.id]?.pos ?? {}).filter((t) => t !== 'QQQ').length, bench: false });
   rows.push({ key: LILO_ID, name: LILO_LABEL, positions: state.lab?.lilo ? liloHeld(state.lab.lilo).length : 0, bench: false });
   for (const id of LEAPS_IDS) rows.push({ key: id, name: LAB_LABEL[id] as string, positions: state.lab?.leaps?.[id]?.held.length ?? 0, bench: false });
   rows.push({ key: ALL_ID, name: ALL_LABEL, positions: state.lab ? labHeld(state.lab, ALL_ID).filter((t) => t !== 'QQQ').length : 0, bench: false });
@@ -338,6 +341,8 @@ export function standings(state: PaperState): Array<{ key: string; name: string;
   for (const id of JAMES_IDS) rows.push({ key: id, name: LAB_LABEL[id] as string, positions: state.lab ? labHeld(state.lab, id).filter((t) => t !== 'QQQ').length : 0, bench: false });
   // James's models, phase 4: James — LEAPS (group E)
   for (const id of JAMES_LEAPS_IDS) rows.push({ key: id, name: LAB_LABEL[id] as string, positions: state.lab ? labHeld(state.lab, id).filter((t) => t !== 'QQQ').length : 0, bench: false });
+  // 🤖 Claude, free choice (group Claude): judged against "📊 QQQ since this account joined"
+  rows.push({ key: CLAUDE_ID, name: CLAUDE_LABEL, positions: state.lab ? labHeld(state.lab, CLAUDE_ID).length : 0, bench: false });
   rows.push({ key: 'lab.list14', name: LABELS.holdResearchCore, positions: PAPER_RESEARCH_14.length, bench: true });
   rows.push({ key: 'lab.list', name: LABELS.holdCore, positions: PAPER_OWNER_LIST.length, bench: true });
   return rows.filter((r) => last.values[r.key] != null)

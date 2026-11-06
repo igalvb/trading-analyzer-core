@@ -67,6 +67,7 @@ export function toBuyAnalysis(a: TickerArtifacts): BuyAnalysis {
     ...(a.reports.extraModels ? { extraModels: a.reports.extraModels } : {}),
     options: (a.leapsCall || a.shortTermCall) ? { leapsCall: a.leapsCall ?? null, shortTermCall: a.shortTermCall ?? null } : null,
     dataQuality: a.dataQuality,
+    ...(a.optionsHistory ? { optionsHistory: a.optionsHistory } : {}),
   };
 }
 

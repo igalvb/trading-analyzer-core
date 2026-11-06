@@ -95,7 +95,7 @@ export const ALL_NIGHTLY_STEPS: readonly NightlyStepDef[] = [
   {
     // Options sentiment plan A-3 / A-8: tonight's per-stock reads with the "if applied" shadow columns (📈 Options Reads,
     // 📦 Options Read Snapshots). Needs the analysis for the shadow columns; writes nothing a report reads.
-    id: 'options.reads', label: 'Options reads stored (not yet applied)', kind: 'job', dependsOn: ['options.chains', 'analysis.tickers'], timeoutMs: 5 * MIN, retries: 2,
+    id: 'options.reads', label: 'Options reads stored' + (activeProfile().options.applied ? '' : ' (not yet applied)'), kind: 'job', dependsOn: ['options.chains', 'analysis.tickers'], timeoutMs: 5 * MIN, retries: 2,
     failedText: 'Tonight\'s options reads were not stored; the reports are unchanged (the reads are not applied yet).', staleText: '',
   },
   {

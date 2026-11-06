@@ -27,6 +27,10 @@ import { bagsOf } from '../src/paper/paperReport.ts';
 import { valuesRows } from '../src/paper/paperLog.ts';
 import type { EngineRead, ExitReadResult } from '../src/backtest/engineRun.ts';
 import type { CboeChainJson } from '../src/fetch/cboe.ts';
+import { RESULTS } from '../src/profile/results.ts';
+/** Cases that read a results pack (profile `results`): skipped under a profile that names none (the test profile);
+ *  a copy with its own pack runs them with its profile (npm test does not). */
+const NEEDS_PACK = RESULTS ? false : 'needs a results pack (the profile names none)';
 
 const DAY = 86_400;
 const unix = (d: string): number => Date.parse(d + 'T00:00:00Z') / 1000;
@@ -271,7 +275,7 @@ describe('FL-19f — the phase-4 report pages (display only)', () => {
   const D = datesTo('2026-10-29', 300);
   const up = D.map((_, i) => 100 + i * 0.2), crash = D.map((_, i) => (i < 250 ? 100 + i * 0.2 : i < 291 ? 150 - (i - 249) : 109 - (i - 290) * 6));
   const chain = { calls: jamesCallsOf(chainOf('TSLA', 150, ['2028-01-21', '2029-01-19'], NOW)), spot: 150 };
-  test('every verdict word for its case; disclaimer; "James — " on both pages; the tabs follow 📞 Options Decision', { skip: 'owner-only: needs the owner results pack (runs in the overlay)' }, () => {
+  test('every verdict word for its case; disclaimer; "James — " on both pages; the tabs follow 📞 Options Decision', { skip: NEEDS_PACK }, () => {
     const calm = buildJamesLeapsRead({ dates: D, closes: up }, { dates: D, closes: up }, chain, NOW * 1000, true);
     assert.equal(calm.verdict, 'WAIT FOR A FIRE SALE');
     assert.equal(buildJamesLeapsRead({ dates: D, closes: up }, { dates: D, closes: crash }, chain, NOW * 1000, true).verdict, 'BUY (market fire sale, gates pass)');

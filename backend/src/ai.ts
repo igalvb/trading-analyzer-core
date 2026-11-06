@@ -31,7 +31,9 @@ import type { ClaudeSdk } from './ai/claudeReview.ts';
 import type { ExitPositionFacts } from './ai/exitFraming.ts';
 import { toBuyAiInput, toExitAiInput } from './ai/aiToSheet.ts';
 import { createAnalysisCache } from './app/analysisCache.ts';
-import { loadPortfolio, loadWatchlist, scratchFactory } from './app/nightlyApp.ts';
+import { loadPortfolio, loadWatchlist, optionsSeedFor, scratchFactory } from './app/nightlyApp.ts';
+import { storedGateOf, storedOptionsGates, type OptionsNight } from './jobs/options/optionsNight.ts';
+import { OPTIONS_READ_APPLIED } from './analysis/options/nightlyRead.ts';
 import { runTickerAnalysisDetailed } from './analysis/runTicker.ts';
 import { tierOf } from './jobs/buy/buyPipeline.ts';
 import { OWN_BLOCK_FLOOR } from './types/decision.ts';
@@ -105,7 +107,19 @@ export async function runAiApp(s: Services, plan: AiRunPlan, over: AiOverrides =
     plainLabels: !s.opts.legacyParity,
   };
   const scratch = await scratchFactory(s);
-  const cache = createAnalysisCache(async (t) => runTickerAnalysisDetailed(tickerDeps(s, await scratch(), { noAi: true }), t));
+  // Options sentiment A-6 / P2 (profile `options.applied`): each ticker's scratch is seeded with its latest stored read
+  // (📦 Options Read Snapshots) when at most 2 trading days old (A-5), else with none. Off: the shared snapshot as before.
+  let gatesP: Promise<Pick<OptionsNight, 'gated'>> | null = null;
+  const cache = createAnalysisCache(async (t) => {
+    const g = OPTIONS_READ_APPLIED && s.sheets ? await (gatesP ??= storedOptionsGates(s.tabStore, s.clock.now(), s.timeZone).catch((e: unknown) => {
+      ctx.log.warning('AI dispatch: the stored options reads could not be read; options are not applied in this run', { detail: String(e) });
+      return { gated: new Map() };
+    })) : null;
+    return runTickerAnalysisDetailed({
+      ...tickerDeps(s, await scratch(await optionsSeedFor(g, t)), { noAi: true }),
+      ...(g ? { optionsGated: (x: string) => storedGateOf(g, x) } : {}),
+    }, t);
+  });
   const ranAt = new Date(s.clock.now());
   const ss = await s.openWorkbook([BUY_SHEET_TAB, EXIT_SHEET_TAB]);
   let buyMsg: string | null = null, exitMsg: string | null = null, portfolio: PortfolioView | null = null;

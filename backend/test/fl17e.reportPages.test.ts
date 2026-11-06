@@ -28,6 +28,10 @@ import { fixturesPresent } from './fixtures.ts';
 import { fixtureBodies, clockAfterFixtures } from './fl7b2Fixtures.ts';
 import { HttpResponse, type HttpRequest, type HttpTransport } from '../src/net/http.ts';
 import { compose } from '../src/compose.ts';
+import { RESULTS } from '../src/profile/results.ts';
+/** Cases that read a results pack (profile `results`): skipped under a profile that names none (the test profile);
+ *  a copy with its own pack runs them with its profile (npm test does not). */
+const NEEDS_PACK = RESULTS ? false : 'needs a results pack (the profile names none)';
 
 const TZ = 'America/New_York';
 const NOW = Date.UTC(2026, 9, 28, 20);
@@ -252,7 +256,7 @@ describe('FL-17e — report pages, display only', () => {
     assert.equal(buildLiloRead(null, null, null).placed, null);
   });
 
-  test('All Models: one row per model, in order, with the simulation columns and the reference rows', { skip: 'owner-only: needs the owner results pack (runs in the overlay)' }, async () => {
+  test('All Models: one row per model, in order, with the simulation columns and the reference rows', { skip: NEEDS_PACK }, async () => {
     const extra = buildExtraModelsReport('TEST', chartOf(260, 0.003), CMP_BULL, {}, TZ, { finalConviction: 80, timing: 'BUY_NOW' });
     const cmp = { existingDirection: 'bullish', newDirection: 'cautionary', schabackerDirection: 'bullish', edwardsMageeDirection: 'mixed', turtleDirection: 'bullish',
       newHeadline: 'Net read leans cautionary. More.', schabackerHeadline: 'Net read leans supportive', verdict: 'MAJORITY' };

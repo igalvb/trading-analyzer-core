@@ -3,7 +3,7 @@
  *   1. PROFILE_JSON env   (tests, CI, replay)
  *   2. PROFILE_FILE env   (a path; local runs)
  *   3. the `⚙️ Profile` tab of the user's My Portfolio sheet (GitHub runs; read by the caller, parsed here)
- *   4. the built-in fallback the caller passes (the owner profile, phases P2-P8 only; removed in P9)
+ *   4. the built-in fallback the caller passes (a private overlay's profile, src/overlay.ts; none in the shared core)
  * P1: nothing calls this yet.
  */
 
@@ -43,7 +43,7 @@ export function profileInputFromRows(rows: readonly (readonly unknown[])[]): Rec
 export interface LoadOptions {
   /** The `⚙️ Profile` tab's rows, when the caller read them (null = no such tab). */
   readonly sheetRows?: readonly (readonly unknown[])[] | null;
-  /** The built-in fallback (P2-P8: the owner profile). */
+  /** The built-in fallback (a private overlay's profile, src/overlay.ts). */
   readonly fallback?: unknown;
   readonly readFile?: (path: string) => string;
 }

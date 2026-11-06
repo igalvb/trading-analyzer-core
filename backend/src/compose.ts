@@ -69,6 +69,7 @@ import { buildDashboard } from './reports/dashboard/dashboard.ts';
 import { writeTextReportToSheet, buildFailureSheet, type TextReportSheet } from './reports/text/textReports.ts';
 import { OPTIONS_SNAPSHOT_SHEET } from './reports/options/tabs.ts';
 import type { OptionsReportDeps } from './reports/options/run.ts';
+import { activeProfile } from './profile/active.ts';
 import { TRANSACTIONS_SHEET } from './portfolio/transactions.ts';
 import { BOTTOM_LINE_TAB } from './reports/bottomLine/summarySheet.ts';
 import { PRICE_CHART_TAB } from './ops/priceChart.ts';
@@ -360,6 +361,8 @@ export function tickerDeps(s: Services, ss: ReportWorkbook, over: { readonly noA
   const detailLog = (ticker: string) => (l: string): void => ctx.log.child(ticker).debug(l);
   return {
     ss, timeZone, clock, ctx, tap: s.tap, legacyParity: parity,
+    // Options sentiment P2 (profile `options.applied`, default off): C-1 / C-3 and the options-off twin. Never in parity.
+    ...(!parity && activeProfile().options.applied ? { optionsApplied: true } : {}),
     fetchYahooChart: (t) => s.fetchChart(t),
     // Parity: the closes-only fetch exactly as legacy. Otherwise the same single request also keeps its dated bars
     // for James's display-only pages (G0b), so they add no HTTP call; only the last ticker's bars are kept.

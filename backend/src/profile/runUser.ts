@@ -3,8 +3,9 @@
  * set three variables:
  *   RUN_USER        the `user` input ('owner' by default)
  *   SECRET_PREFIX   '' for the owner, 'u2_' for user u2 (the workflow reads the secrets named U2_<NAME>)
- *   PROFILE_SOURCE  '' for the owner (built-in profile, no extra sheet request), 'sheet' for anyone else:
- *                   the workflow reads that user's `⚙️ Profile` tab first (npm run profile-fetch) into PROFILE_FILE.
+ *   PROFILE_SOURCE  '' for the default user, 'sheet' for anyone else: the workflow reads that user's `⚙️ Profile`
+ *                   tab first (npm run profile-fetch) into PROFILE_FILE. The default user's tab is read too unless the
+ *                   copy has a built-in profile (workflows/schedule.ts PROFILE_STEP_IF, src/overlay.ts).
  *
  * The rule this file enforces: a run for anyone but the owner NEVER uses the built-in owner profile, and the
  * profile it uses must name that user (`user.id`). The owner's runs (RUN_USER unset, '' or 'owner') are unchanged.
@@ -37,7 +38,10 @@ export function runUserProblem(user: string): string | null {
 export function runProfileProblem(env: Env, profile: Profile, source: ProfileSource): string | null {
   const user = runUserOf(env);
   const wantsSheet = (env.PROFILE_SOURCE ?? '').trim() === 'sheet';
-  if (user === OWNER_USER && (!wantsSheet || source !== 'built-in')) return null; // the default user: its own repo secrets and Profile tab
+  // The default user (a single-user copy: its own repo secrets and its own Profile tab) may name itself anything valid
+  // in `user.id`; only a profile it did not load from its own tab (the built-in one with PROFILE_SOURCE=sheet) is refused.
+  // The workflows never set PROFILE_SOURCE=sheet for the default user, so a copy with a built-in profile runs unchanged.
+  if (user === OWNER_USER && (!wantsSheet || source !== 'built-in')) return null;
   const bad = runUserProblem(user);
   if (bad) return bad;
   if (source === 'built-in') return 'this run is for user ' + user + ' but no profile of theirs was loaded (the Profile tab step did not run)';

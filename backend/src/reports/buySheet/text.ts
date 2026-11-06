@@ -98,7 +98,7 @@ export const T = {
   tagHeld: ' · you hold this: add-to-position decision',
   tagGroup: ' · Bitcoin group (one rank)',
   changedHeader: '⚠ CHANGED SINCE LAST RUN — verdict changes',
-  optionsReadsHeader: (applied: boolean): string => '📈 OPTIONS READS — ' + (applied ? 'applied to the scores' : 'not yet applied (shadow)'),
+  optionsReadsHeader: (applied: boolean): string => '📈 OPTIONS READS — ' + (applied ? 'applied (shown; today\'s options signals score 0, only the capped new measures can score)' : 'not yet applied (shadow)'),
   optionsReadsNote: 'Each stock\'s own options read tonight and what it would change if applied (CONFIRM +8 / CONFLICT -10 on conviction, LEAPS lean ±5, the tech score\'s Options category). The decisions above do not use it yet.',
   optionsReadsMissing: (names: string): string => 'Options read missing for ' + names + '.',
   noChanges: 'No verdict changed since the last run.',

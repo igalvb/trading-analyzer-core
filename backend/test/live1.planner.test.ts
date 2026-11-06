@@ -25,6 +25,10 @@ import { runLiveDryRun, planLiveNight, liveAttention, type LiveNight } from '../
 import { liveFeeReportMain } from '../src/live/feeReportCli.ts';
 import { sheetFor, isAllowListedName, PROTECTED_TABS, LIVE_REPORT_TABS } from '../src/sheets/tabs.ts';
 import { NIGHTLY_ORDER, stepDef } from '../src/jobs/nightly/steps.ts';
+import { RESULTS } from '../src/profile/results.ts';
+/** Cases that read a results pack (profile `results`): skipped under a profile that names none (the test profile);
+ *  a copy with its own pack runs them with its profile (npm test does not). */
+const NEEDS_PACK = RESULTS ? false : 'needs a results pack (the profile names none)';
 
 /** Noon UTC on a New York day plus `h` hours of New York winter time (UTC-5). */
 const nyAt = (day: string, hh: number, mm = 0): number => Date.parse(day + 'T00:00:00Z') + ((hh + 5) * 60 + mm) * 60_000;
@@ -367,7 +371,7 @@ describe('the real-account fakes', () => {
 });
 
 describe('the fee report (decides D1)', () => {
-  test('research: only accounts that beat Hold QQQ and Hold your 14 after fees in every period are offered; the best leads', { skip: 'owner-only: needs the owner results pack (runs in the overlay)' }, () => {
+  test('research: only accounts that beat Hold QQQ and Hold your 14 after fees in every period are offered; the best leads', { skip: NEEDS_PACK }, () => {
     const r = buildFeeReport(null, RESEARCH_FEES, LIVE_DEFAULTS);
     assert.equal(r.rows.length, 10);
     for (const id of r.offered) {
@@ -407,7 +411,7 @@ describe('the fee report (decides D1)', () => {
     assert.equal(r.best, 'lab.turtle');
   });
 
-  test('the CLI prints the report from a saved paper state and the stored research run', { skip: 'owner-only: needs the owner results pack (runs in the overlay)' }, async () => {
+  test('the CLI prints the report from a saved paper state and the stored research run', { skip: NEEDS_PACK }, async () => {
     const out: string[] = [];
     const code = await liveFeeReportMain(['--no-sheet'], { out: (x) => out.push(x), err: () => {}, env: {} }, { loadPaper: async () => null });
     assert.equal(code, 0);

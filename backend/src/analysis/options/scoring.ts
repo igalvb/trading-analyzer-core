@@ -155,7 +155,10 @@ export function analyzeOptionsForScoring(snap: OptionsSnapshot | null | undefine
   if (opts.plainLabels) out.notes.push(PUT_CALL_LABEL + ' ' + putCallText(pc));
   else out.notes.push('Put/Call OI ' + (pc != null ? pc.toFixed(2) : 'N/A') + (pcSig > 0 ? ' (call-heavy/bullish)' : pcSig < 0 ? ' (put-heavy/bearish)' : ' (neutral)'));
   if (tC && tP) out.notes.push('Top call conv ' + tC.conviction + ' vs top put conv ' + tP.conviction);
-  out.notes.push('LEAPS lean ' + (out.leapsLean > 0.15 ? 'bullish (institutions accumulating)' : out.leapsLean < -0.15 ? 'bearish/hedged' : 'neutral'));
+  // Options weights due diligence 2026-11-06 (4.7 item 5): nothing in the data says who holds a contract, so the
+  // production label describes the balance only. Parity runs keep legacy's words.
+  if (opts.plainLabels) out.notes.push('LEAPS call/put balance ' + (out.leapsLean > 0.15 ? 'call-heavy' : out.leapsLean < -0.15 ? 'put-heavy' : 'even') + ' (not a tested signal)');
+  else out.notes.push('LEAPS lean ' + (out.leapsLean > 0.15 ? 'bullish (institutions accumulating)' : out.leapsLean < -0.15 ? 'bearish/hedged' : 'neutral'));
   if (out.ivRank != null) out.notes.push((opts.plainLabels ? IV_CHAIN_PCT_LABEL + ' ' : 'IV %ile ') + out.ivRank + (out.ivRank >= 80 ? ' (elevated — event/fear priced in)' : out.ivRank <= 20 ? ' (low — complacent)' : ''));
   return out;
 }

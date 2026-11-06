@@ -14,7 +14,8 @@ import {
   MY_OPTIONS_CRON_EST, MY_OPTIONS_ET_HOUR, NIGHTLY, NIGHTLY_STEP_ORDER, WORKFLOWS, WORKFLOW_DIR_CANDIDATES,
   cronInstant, cronsThatPassGuard, etHourOf, findSecretLikeText, localClock, parseCron, renderScheduleBlock,
   shouldRunNow, yamlSubsetProblems, MIGRATE_DATA_TABS, MIGRATION_STEPS, MIGRATION_BLOCKED_WINDOWS_UTC, SHEET_WRITER_WORKFLOWS, migrationBlockedWindow,
-  OWNER_USER, PER_USER_ENV, USER_INPUT, groupFor, perUserGroup, perUserSecretLine, secretNameFor,
+  OWNER_USER, PER_USER_ENV, PROFILE_STEP_IF, USER_INPUT, groupFor, perUserGroup, perUserSecretLine, secretNameFor,
+  SETUP_CHECK, INIT_USER_SHEETS,
   WATCHDOG, WATCHDOG_CRON, VERIFY, NIGHTLY_BACKUP, NIGHTLY_BACKUP_CRONS, NIGHTLY_BACKUP_SINCE_UTC, NIGHTLY_BACKUP_CUTOFF_UTC_HOUR, myOptionsScheduledShouldRun, nightlyBackupAction,
 } from '../src/workflows/schedule.ts';
 import { DARK_POOL_DAILY_JOBS } from '../src/jobs/darkPool.ts';
@@ -385,8 +386,10 @@ describe('FL-8w the DATA agrees with the job modules', () => {
 });
 
 describe('GENERIC_PLAN P5: per-user workflows (the owner runs exactly as before)', () => {
-  const PER_USER = ['ai-dispatch.yml', 'analyze.yml', 'exit-report.yml', 'my-options.yml', 'nightly.yml', 'send-exit.yml', 'telegram-check.yml', 'telegram-setup.yml', 'verify.yml', 'watchdog.yml'];
-  const baseOf = (w: { file: string }): string => (w.file === 'my-options.yml' ? 'my-options' : w.file === 'watchdog.yml' ? 'watchdog' : w.file === 'verify.yml' ? 'verify' : w.file.startsWith('telegram-') ? 'telegram' : 'sheet-report-writers');
+  const PER_USER = ['ai-dispatch.yml', 'analyze.yml', 'exit-report.yml', 'init-user-sheets.yml', 'my-options.yml', 'nightly.yml', 'send-exit.yml', 'setup-check.yml', 'telegram-check.yml', 'telegram-setup.yml', 'verify.yml', 'watchdog.yml'];
+  /** Owner 2026-11-06: the two set-up buttons read the Profile tab too (setup-check only reads; init-user-sheets adds missing tabs). */
+  const SETUP_FILES = ['init-user-sheets.yml', 'setup-check.yml'];
+  const baseOf = (w: { file: string }): string => (w.file === 'my-options.yml' ? 'my-options' : w.file === 'watchdog.yml' ? 'watchdog' : w.file === 'verify.yml' ? 'verify' : w.file.startsWith('telegram-') ? 'telegram' : SETUP_FILES.includes(w.file) ? 'setup' : 'sheet-report-writers');
   /** The GitHub expressions used here, run as JavaScript (`&&` / `||` return operands in both; inputs are lower case). */
   const evalExpr = (expr: string, user: string | null): string => {
     const m = /^\$\{\{ (.*) \}\}$/.exec(expr);
@@ -398,9 +401,9 @@ describe('GENERIC_PLAN P5: per-user workflows (the owner runs exactly as before)
     return String(new Function('u', 'return ' + js)(user));
   };
 
-  test('exactly the ten files that use per-user secrets take the user input; CI, record, fetch-files and the migration do not', () => {
+  test('exactly the twelve files that use per-user secrets take the user input; CI, record, fetch-files and the migration do not', () => {
     assert.deepEqual(WORKFLOWS.filter((w) => w.perUser).map((w) => w.file).sort(), PER_USER);
-    assert.deepEqual(WORKFLOWS.filter((w) => w.readsProfile).map((w) => w.file).sort(), SHEET_WRITER_WORKFLOWS.map((w) => w.file).sort());
+    assert.deepEqual(WORKFLOWS.filter((w) => w.readsProfile).map((w) => w.file).sort(), [...SHEET_WRITER_WORKFLOWS.map((w) => w.file), ...SETUP_FILES].sort());
     for (const w of WORKFLOWS.filter((x) => !x.perUser)) {
       const t = readWorkflow(w.file);
       assert.ok(!t.includes('inputs.user') && !t.includes('SECRET_PREFIX'), w.file);
@@ -421,11 +424,11 @@ describe('GENERIC_PLAN P5: per-user workflows (the owner runs exactly as before)
     });
   }
   for (const w of WORKFLOWS.filter((x) => x.readsProfile)) {
-    test(w.file + ': every user reads the Profile tab first', () => {
+    test(w.file + ': other users read their Profile tab first; the default user only when the copy has no built-in profile', () => {
       const t = readWorkflow(w.file);
       const step = stepWith(t, 'npm run profile-fetch');
-      const guard = w.file === 'my-options.yml' ? " && steps.guard.outputs.run == 'true'" : '';
-      assert.ok(step.includes("\n        if: env.PROFILE_SOURCE == 'sheet'" + guard + '\n'), 'gated: ' + step.slice(0, 120));
+      const cond = w.file === 'my-options.yml' ? '(' + PROFILE_STEP_IF + ") && steps.guard.outputs.run == 'true'" : PROFILE_STEP_IF;
+      assert.ok(step.includes('\n        if: ' + cond + '\n'), 'gated: ' + step.slice(0, 160));
       assert.ok(step.includes('npm run profile-fetch -- --out "$PWD/out/profile.json"'));
       assert.ok(step.includes('echo "PROFILE_FILE=$PWD/out/profile.json" >> "$GITHUB_ENV"'));
       const tg = w.secrets.includes('TELEGRAM_CHAT_ID') ? ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'] : [];
@@ -438,14 +441,14 @@ describe('GENERIC_PLAN P5: per-user workflows (the owner runs exactly as before)
     for (const u of [null, '', OWNER_USER]) {
       assert.equal(evalExpr(env.RUN_USER as string, u), OWNER_USER);
       assert.equal(evalExpr(env.SECRET_PREFIX as string, u), '');
-      assert.equal(env.PROFILE_SOURCE, 'sheet');
+      assert.equal(evalExpr(env.PROFILE_SOURCE as string, u), '');
       assert.equal(evalExpr(perUserGroup('sheet-report-writers'), u), 'sheet-report-writers');
       assert.equal(groupFor(u, 'sheet-report-writers'), 'sheet-report-writers');
       assert.equal(secretNameFor(u, 'SPREADSHEET_ID'), 'SPREADSHEET_ID');
     }
     assert.equal(evalExpr(env.RUN_USER as string, 'u2'), 'u2');
     assert.equal(evalExpr(env.SECRET_PREFIX as string, 'u2'), 'u2_');
-    assert.equal(env.PROFILE_SOURCE, 'sheet');
+    assert.equal(evalExpr(env.PROFILE_SOURCE as string, 'u2'), 'sheet');
     assert.equal(evalExpr(perUserGroup('sheet-report-writers'), 'u2'), groupFor('u2', 'sheet-report-writers'));
     assert.equal(groupFor('u2', 'sheet-report-writers'), 'sheet-report-writers-u2');
     assert.equal(secretNameFor('u2', 'SPREADSHEET_ID'), 'U2_SPREADSHEET_ID');
@@ -589,5 +592,44 @@ describe('Owner 2026-11-04: the daily run watchdog (src/watchdog.ts)', () => {
   test('package.json has the watchdog command', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(BACKEND_DIR, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
     assert.equal(pkg.scripts['watchdog'], 'node --env-file-if-exists=.env src/watchdog.ts');
+  });
+});
+
+describe('Owner 2026-11-06: the set-up buttons (setup-check.yml, init-user-sheets.yml) for a user without a terminal', () => {
+  for (const w of [SETUP_CHECK, INIT_USER_SHEETS]) {
+    test(w.file + ': manual only, read permission, group setup, 10 min, Node 24 actions, profile step before the main step, leak check before the run summary', () => {
+      const t = readWorkflow(w.file);
+      assert.match(t, /^ {2}workflow_dispatch:/m);
+      assert.doesNotMatch(t, /^ {2}(push|pull_request|schedule):/m, 'manual only');
+      assert.deepEqual(w.crons, []);
+      assert.equal(w.timeoutMinutes, 10);
+      assert.equal(w.concurrencyGroup, perUserGroup('setup'));
+      assert.ok(!SHEET_WRITER_WORKFLOWS.includes(w), 'not one of the six writers the data move waits for');
+      for (const a of ['actions/checkout@v5', 'actions/setup-node@v5']) assert.ok(t.includes(a), a);
+      assert.ok(t.includes("node-version: '24'"));
+      assert.ok(!t.includes('npm run lock-sheets'), 'no sheet writer step to re-lock');
+      const leak = stepWith(t, 'Check the log for leaked keys');
+      assert.ok(leak.includes('if: always()'));
+      assert.match(leak, /for name in .*SPREADSHEET_ID .*TELEGRAM_BOT_TOKEN/);
+      assert.ok(t.indexOf('npm run profile-fetch') < t.indexOf(w.commands[0] as string));
+      assert.ok(t.indexOf(w.commands[0] as string) < t.indexOf('Check the log for leaked keys'));
+      assert.ok(t.indexOf('Check the log for leaked keys') < t.indexOf('$GITHUB_STEP_SUMMARY'), 'the summary is written after the leak check');
+    });
+  }
+  test('setup-check: every key the check tests is passed to it; a bad Profile tab still gives the table (continue-on-error)', () => {
+    const t = readWorkflow(SETUP_CHECK.file);
+    assert.deepEqual(secretRefs(stepWith(t, 'npm run setup-check')).sort(), [...SETUP_CHECK.secrets].sort());
+    assert.ok(stepWith(t, 'npm run profile-fetch').includes('continue-on-error: true'));
+    assert.match(stepWith(t, 'Check the log for leaked keys'), /for name in .*ANTHROPIC_API_KEY .*TELEGRAM_WEBHOOK_SECRET;/);
+  });
+  test('init-user-sheets: only the robot key and My Portfolio go to the main step; a bad Profile tab stops it', () => {
+    const t = readWorkflow(INIT_USER_SHEETS.file);
+    assert.deepEqual(secretRefs(stepWith(t, 'npm run init-user-sheets')).sort(), ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID']);
+    assert.ok(!stepWith(t, 'npm run profile-fetch').includes('continue-on-error'));
+  });
+  test('package.json has both commands', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(BACKEND_DIR, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+    assert.equal(pkg.scripts['setup-check'], 'node src/setupCheck.ts');
+    assert.equal(pkg.scripts['init-user-sheets'], 'node src/initUserSheets.ts');
   });
 });

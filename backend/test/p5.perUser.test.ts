@@ -1,6 +1,7 @@
 /**
  * GENERIC_PLAN P5: a run for another user reads that user's `⚙️ Profile` tab (npm run profile-fetch) and never the
- * owner's built-in profile; the owner's runs are unchanged (no tab read, no check). Example data only.
+ * built-in profile of the copy (src/overlay.ts); the default user's runs are unchanged (no tab read, no check). Example
+ * data only.
  */
 
 import { describe, test } from 'node:test';
@@ -14,6 +15,7 @@ import { isOwnerRun, runProfileProblem, runUserOf, runUserProblem } from '../src
 import { validateProfile, type Profile } from '../src/profile/schema.ts';
 import { EXAMPLE_PROFILE_INPUT } from '../src/profile/example.ts';
 import { PROFILE_TAB } from '../src/profile/load.ts';
+import { hasOverlayProfile } from '../src/overlay.ts';
 
 const BACKEND = path.resolve(import.meta.dirname, '..');
 const U2_ROWS: Rows = [
@@ -39,7 +41,7 @@ describe('P5 who the run is for (profile/runUser.ts)', () => {
     assert.equal(runUserProblem('u2'), null);
     for (const bad of ['2u', 'u-2', 'u 2', 'a'.repeat(21), '']) assert.ok(runUserProblem(bad), bad);
   });
-  test('the owner run passes with the built-in profile (today); another user never gets the built-in one', () => {
+  test('the default user passes with a built-in profile; another user never gets the built-in one', () => {
     const example = profileOf(EXAMPLE_PROFILE_INPUT);
     assert.equal(runProfileProblem({}, example, 'built-in'), null);
     assert.equal(runProfileProblem({ RUN_USER: 'owner', PROFILE_SOURCE: '' }, example, 'built-in'), null);
@@ -49,6 +51,12 @@ describe('P5 who the run is for (profile/runUser.ts)', () => {
     const u2 = profileOf({ ...EXAMPLE_PROFILE_INPUT, user: { id: 'u2', timeZone: 'Europe/London' } });
     assert.equal(runProfileProblem({ RUN_USER: 'u2', PROFILE_SOURCE: 'sheet' }, u2, 'PROFILE_FILE'), null);
   });
+  test('the default user reading its own Profile tab may use any valid user.id (single-user copy); the built-in one is refused then', () => {
+    const example = profileOf(EXAMPLE_PROFILE_INPUT);
+    assert.equal(runProfileProblem({ PROFILE_SOURCE: 'sheet' }, example, 'PROFILE_FILE'), null);
+    assert.equal(runProfileProblem({ RUN_USER: 'owner', PROFILE_SOURCE: 'sheet' }, example, 'PROFILE_JSON'), null);
+    assert.match(String(runProfileProblem({ RUN_USER: 'owner', PROFILE_SOURCE: 'sheet' }, example, 'built-in')), /no profile of theirs/);
+  });
   test('the process refuses at the first profile read: u2 without its file; u2 with its file runs', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p5-'));
     const file = path.join(dir, 'u2.json');
@@ -56,11 +64,19 @@ describe('P5 who the run is for (profile/runUser.ts)', () => {
     const code = "import { activeProfile } from './src/profile/active.ts'; console.log(activeProfile().user.id);";
     const run = (env: Record<string, string>) => spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd: BACKEND, env: { PATH: process.env.PATH ?? '', TZ: 'America/New_York', ...env }, encoding: 'utf8' });
     const owner = run({ RUN_USER: 'owner', PROFILE_SOURCE: '' });
-    assert.notEqual(owner.status, 0, 'no built-in profile');
-    assert.match(owner.stderr, /No profile: fill the/);
     const missing = run({ RUN_USER: 'u2', PROFILE_SOURCE: 'sheet' });
     assert.notEqual(missing.status, 0);
-    assert.match(missing.stderr, /No profile: fill the/);
+    if (hasOverlayProfile()) {
+      // A copy with a built-in profile (src/overlay.ts): the default user runs with it; u2 never does.
+      assert.equal(owner.status, 0, owner.stderr);
+      assert.equal(owner.stdout.trim(), 'owner');
+      assert.match(missing.stderr, /The profile cannot be used: this run is for user u2/);
+    } else {
+      // No built-in profile: without a profile every user, the default one too, refuses with one line.
+      assert.notEqual(owner.status, 0, 'no built-in profile');
+      assert.match(owner.stderr, /No profile: fill the/);
+      assert.match(missing.stderr, /No profile: fill the/);
+    }
     const ok = run({ RUN_USER: 'u2', PROFILE_SOURCE: 'sheet', PROFILE_FILE: file });
     assert.equal(ok.status, 0, ok.stderr);
     assert.equal(ok.stdout.trim(), 'u2');
@@ -107,6 +123,11 @@ describe('P5 npm run profile-fetch (the Profile tab -> PROFILE_FILE)', () => {
     const other = await go({ rows: U2_ROWS.map((r) => (r[0] === 'user.id' ? ['user.id', 'u3'] : r)) });
     assert.equal(other.code, 1);
     assert.match(other.lines[0] as string, /is for user u3, not u2/);
+    const ownerAnyId = await go({ env: { ...env, RUN_USER: 'owner' }, rows: U2_ROWS.map((r) => (r[0] === 'user.id' ? ['user.id', 'jane'] : r)) });
+    assert.equal(ownerAnyId.code, 0, 'the default user (a single-user copy) may name itself anything valid: ' + ownerAnyId.lines.join('\n'));
+    assert.match(ownerAnyId.lines.join('\n'), /user owner, 3 ticker\(s\)/);
+    const ownerBadId = await go({ env: { ...env, RUN_USER: 'owner' }, rows: U2_ROWS.map((r) => (r[0] === 'user.id' ? ['user.id', 'Not Valid'] : r)) });
+    assert.equal(ownerBadId.code, 1, 'an invalid id is still refused');
     const fail = await go({ fail: true });
     assert.equal(fail.code, 1);
     assert.match(fail.lines[0] as string, /could not be read \(403\)/);

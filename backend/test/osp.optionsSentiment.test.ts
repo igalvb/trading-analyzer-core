@@ -147,8 +147,10 @@ describe('A-4: each scratch would hold its own ticker (go-live path; shadow keep
   test('optionsSeedFor seeds the ticker\'s own snapshot only when applied', async () => {
     const { http } = fakeCboe({ AAA: chainJson(1, spec('AAA')), BBB: chainJson(2, spec('BBB')) });
     const night = await runOptionsChains({ cboe: { http, memo: new Map(), stats: new Map() }, store: new MemoryTabStore(), kv: new MemoryPropertyStore(), timeZone: TZ, now: () => NOW, log: () => {}, fetchChart: async () => null }, ['AAA', 'BBB'], []);
-    assert.equal(OPTIONS_READ_APPLIED, false, 'shadow phase');
-    assert.equal(await optionsSeedFor(night, 'AAA'), null, 'shadow: the scratch keeps the shared snapshot');
+    // Go-live (owner 2026-11-06): the owner profile applies the read; the shadow path is still tested explicitly.
+    assert.equal(OPTIONS_READ_APPLIED, true, 'applied for the owner');
+    assert.equal(await optionsSeedFor(night, 'AAA', false), null, 'shadow: the scratch keeps the shared snapshot');
+    assert.ok(await optionsSeedFor(night, 'AAA'), 'applied by default for the owner');
     for (const t of ['AAA', 'BBB']) {
       const seed = (await optionsSeedFor(night, t, true))!;
       const wb = await ReportWorkbook.open(new MemoryWorkbookBackend(seed as never), ['*']);
@@ -218,7 +220,8 @@ describe('A-3: the two append-only tabs, written once per day', () => {
     assert.equal(rows.length, 3);
     const col = (k: string): number => OPTIONS_READS_HEADER.indexOf(k);
     const aaa = rows.find((r) => r[1] === 'AAA')!, zzz = rows.find((r) => r[1] === 'ZZZ')!;
-    assert.equal(aaa[col('Applied')], 'no (shadow)');
+    // Go-live (owner 2026-11-06, profile options.applied on for the owner): the row says applied.
+    assert.equal(aaa[col('Applied')], 'yes');
     assert.equal(aaa[col('If applied: options')], 'CONFIRM');
     assert.equal(aaa[col('Conviction if applied')], 71);
     assert.equal(aaa[col('C-3 options')], 'CONFIRM');
@@ -257,7 +260,7 @@ describe('A-7: run summary counting', () => {
   test('optionsRunReport counts the nightly stocks only', async () => {
     const { http } = fakeCboe({ AAA: chainJson(1, spec('AAA')) });
     const night = await runOptionsChains({ cboe: { http, memo: new Map(), stats: new Map() }, store: new MemoryTabStore(), kv: new MemoryPropertyStore(), timeZone: TZ, now: () => NOW, log: () => {}, fetchChart: async () => null }, ['AAA', 'ZZZ'], ['PPP']);
-    assert.deepEqual(optionsRunReport(night), { day: '2026-10-29', stocks: 2, applied: false, readTonight: 1, stored: [], missing: ['ZZZ'] });
+    assert.deepEqual(optionsRunReport(night), { day: '2026-10-29', stocks: 2, applied: true, readTonight: 1, stored: [], missing: ['ZZZ'] });
     assert.equal(optionsRunReport(null), null);
   });
 });

@@ -10,7 +10,8 @@
  * Row 29: after the run, the Telegram digest (the Buy and Exit PDFs only, the bottom line as the caption, tonight's
  * summary on the first PDF's cover; reports/digest/nightlyDigest.ts, notify/policy.ts), only against the real Sheet
  * and when TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are set. Row 38: inside GitHub Actions the summary ends with the month's GitHub minutes (reports/digest/actionsMinutes.ts; GITHUB_TOKEN with `actions: read`). A digest failure is logged;
- * it never changes the run's exit status.
+ * it never changes the run's exit status. On a Saturday night (New York) the paper test's weekly PDF goes too, once per
+ * week (reports/paperWeekly.ts maybeSendPaperWeekly), right after the run and before the stores are flushed.
  *
  * Exit status: 0 when the run finished (even partly), 1 when every step failed or the run crashed.
  */
@@ -24,6 +25,7 @@ import { buildNightlyApp, type NightlyApp } from './app/nightlyApp.ts';
 import { digestOf, sendNightlyDigest, type DigestSent } from './reports/digest/nightlyDigest.ts';
 import { actionsMinutesLine, MINUTES_UNREADABLE } from './reports/digest/actionsMinutes.ts';
 import { loadPaper } from './paper/paperJob.ts';
+import { maybeSendPaperWeekly } from './reports/paperWeekly.ts';
 import { findChrome, htmlToPdf } from './reports/pdf/chromePdf.ts';
 import type { RunSummary } from './jobs/nightly/summary.ts';
 import type { TabStore } from './storage/tabStore.ts';
@@ -42,6 +44,8 @@ export async function nightlyMain(argv: readonly string[], io: CliIo = STD_IO, o
     ...(over.transport ? { transport: over.transport } : {}), ...(over.clock ? { clock: over.clock } : {}), ...(over.initialTabs ? { initialTabs: over.initialTabs } : {}),
   });
   const timeout = Number(env.NIGHTLY_TICKER_TIMEOUT_MS);
+  const token = (env.TELEGRAM_BOT_TOKEN ?? '').trim(), chatId = (env.TELEGRAM_CHAT_ID ?? '').trim();
+  const digestOn = (env.NIGHTLY_DIGEST ?? '').trim().toLowerCase() !== 'off';
   let run;
   let built: NightlyApp | null = null;
   try {
@@ -49,6 +53,12 @@ export async function nightlyMain(argv: readonly string[], io: CliIo = STD_IO, o
       const app = await buildNightlyApp(s, Number.isFinite(timeout) && timeout > 0 ? { tickerTimeoutMs: timeout } : {});
       built = app;
       const result = await runNightly(app.deps, app.options);
+      // The paper test's weekly PDF (reports/paperWeekly.ts): Saturday nights only, once per week, after the paper step;
+      // inside the Master Lock so the week's key in the property store is flushed with the run's.
+      if (s.sheets && token && chatId && digestOn) {
+        await maybeSendPaperWeekly({ store: s.tabStore, kv: s.kv, telegram: { deps: { token }, chatId }, toPdf: pdfMaker(env), log: textLog(s.ctx.log), now: s.clock.now(), timeZone: s.timeZone })
+          .catch((e: unknown) => s.ctx.log.warning('paper weekly failed (the nightly result is unchanged)', { detail: String(e) }));
+      }
       await s.flushStores();
       return result;
     });
@@ -64,8 +74,7 @@ export async function nightlyMain(argv: readonly string[], io: CliIo = STD_IO, o
   // F-B7-1: the Sheets quota (about 50 calls a minute) is what sets the run time; log the count every run.
   if (s.sheets) s.ctx.log.info('Sheets API calls this run: ' + [s.sheets, s.reportsSheets, s.dataSheets].reduce((n, c) => n + (c ? c.callCount() : 0), 0));
   io.out([...buildPlainSummary(summary), ...run.reportLines].join('\n') + '\n');
-  const token = (env.TELEGRAM_BOT_TOKEN ?? '').trim(), chatId = (env.TELEGRAM_CHAT_ID ?? '').trim();
-  if (built && s.sheets && token && chatId && (env.NIGHTLY_DIGEST ?? '').trim().toLowerCase() !== 'off') {
+  if (built && s.sheets && token && chatId && digestOn) {
     const app: NightlyApp = built;
     await runNightlyDigest({
       app, summary, store: s.tabStore, timeZone: s.timeZone, now: s.clock.now(), log: textLog(s.ctx.log), warn: (m) => s.ctx.log.warning(m),
@@ -73,11 +82,17 @@ export async function nightlyMain(argv: readonly string[], io: CliIo = STD_IO, o
       telegram: { deps: { token }, chatId },
       // Row 38: the GitHub Actions minutes line, only inside Actions (the workflow passes GITHUB_TOKEN / GITHUB_REPOSITORY).
       ...((env.GITHUB_ACTIONS ?? '') === 'true' || (env.GITHUB_TOKEN ?? '').trim() ? { minutesLine: () => actionsMinutesLine({ env, now: s.clock.now(), log: textLog(s.ctx.log) }) } : {}),
-      toPdf: (() => { const chrome = findChrome(env); return chrome ? (html: string, pdf: string) => htmlToPdf(html, pdf, chrome) : null; })(),
+      toPdf: pdfMaker(env),
     });
   }
   return summary.overall === 'failed' ? 1 : 0;
 }
+
+/** HTML to PDF with the runner's Chrome; null when there is none. */
+const pdfMaker = (env: Readonly<Record<string, string | undefined>>): ((html: string, pdf: string) => Promise<void>) | null => {
+  const chrome = findChrome(env);
+  return chrome ? (html, pdf) => htmlToPdf(html, pdf, chrome) : null;
+};
 
 export interface NightlyDigestDeps {
   readonly app: Pick<NightlyApp, 'digest'>;

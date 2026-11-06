@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       user:
-        description: 'User id. owner = you (repo secrets, your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
+        description: 'User id. owner = you (repo secrets; the built-in profile if this copy has one, else your Profile tab). Another id uses the secrets named ID_NAME and its Profile tab'
         type: string
         default: owner
 
@@ -21,7 +21,7 @@ env:
   TZ: America/New_York
   RUN_USER: ${{ inputs.user || 'owner' }}
   SECRET_PREFIX: ${{ (inputs.user || 'owner') != 'owner' && format('{0}_', inputs.user) || '' }}
-  PROFILE_SOURCE: sheet
+  PROFILE_SOURCE: ${{ (inputs.user || 'owner') != 'owner' && 'sheet' || '' }}
 
 defaults:
   run:

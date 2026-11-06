@@ -247,6 +247,21 @@ const MAX_RR_REDUCTION = 0.40;
  */
 const OPTIONS_CONFLICT_NOTE = 'options CONFLICT −10';
 const LEAPS_HEDGED_NOTE = 'LEAPS hedged −5';
+/**
+ * Options weights due diligence (docs/OPTIONS_WEIGHTS_DUE_DILIGENCE_2026-11-06.md, owner yes 2026-11-06), profile
+ * `options.applied`: today's options terms (CONFIRM +8 / CONFLICT -10, LEAPS lean ±5) score 0 -- the read is shown,
+ * not scored -- and the new measures' points (smirk, IV change) are added instead, hard-capped at -3 / +2, in the same
+ * place (after the fundamentals reduction; skipped on the blocked path). Absent: the legacy terms exactly.
+ */
+export interface OptionsWeights {
+  /** The new measures' conviction points (capped here again at -3 / +2). */
+  readonly points: number;
+  /** Plain notes for the conviction line (e.g. "options smirk steep -2"). */
+  readonly notes: readonly string[];
+}
+export const OPTIONS_WEIGHT_CAP_UP = 2;
+export const OPTIONS_WEIGHT_CAP_DOWN = -3;
+
 const MACRO_NOTE_SUFFIX = ' (weak/unconfirmed signal — see MACRO_REGIME_VALIDATION_RESULTS.md)';
 
 /** Fundamental band boundaries (:3172). 57 and 43 are the legacy cutoffs. */
@@ -288,6 +303,7 @@ export function synthesizeDecision(
   macroRead: MacroRead | null | undefined,
   status?: StatusAccumulator,
   account: AccountConfig = ACCOUNT,
+  optionsWeights?: OptionsWeights | null,
 ): Decision {
   const fundBand = fundBandOf(fundResult.score);
   const timing = techPlan.timing;
@@ -341,7 +357,11 @@ export function synthesizeDecision(
     }
     finalConviction = Math.round(T * (1 - reduction));
 
-    if (optAnalysis && optAnalysis.available) {
+    if (optionsWeights) {
+      const pts = Math.max(OPTIONS_WEIGHT_CAP_DOWN, Math.min(OPTIONS_WEIGHT_CAP_UP, Math.round(optionsWeights.points)));
+      finalConviction += pts;
+      convNotes.push(...optionsWeights.notes);
+    } else if (optAnalysis && optAnalysis.available) {
       if (optAnalysis.confirm === 'confirm') {
         finalConviction += 8;
         convNotes.push('options CONFIRM +8');
@@ -504,7 +524,7 @@ export function synthesizeDecision(
 
   if (optAnalysis && optAnalysis.available) {
     lines.push(
-      'Options: ' + optAnalysis.confirm.toUpperCase() + ' — ' + optAnalysis.notes.join(' · '),
+      (optionsWeights ? 'Options (shown, not scored): ' : 'Options: ') + optAnalysis.confirm.toUpperCase() + ' — ' + optAnalysis.notes.join(' · '),
     );
   } else {
     lines.push(

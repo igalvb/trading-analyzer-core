@@ -36,6 +36,7 @@ import { marketFireSale, stockFireSale, zSeries } from '../analysis/options/fire
 import { fairValueOf, FAIR_VALUE } from '../analysis/options/fairValue.ts';
 import { realizedVol } from '../analysis/options/blackScholes.ts';
 import { rateOn } from '../research/optionsSim.ts';
+import { CLAUDE_ID, CLAUDE_LABEL, claudeDay, claudeValue, claudeHeld, newClaudeBook, type ClaudeBook, type ClaudeNight } from './paperClaude.ts';
 
 /**
  * James's models, phase 4 (docs/models/MASTER_PLAN.md section 5; plans 03 and 04, group "E James LEAPS"): James —
@@ -150,6 +151,8 @@ export interface LabSetup {
   readonly profitTaking?: PtSchedule;
   /** James — Quality Gate: a buy is made only when the stock's score passes this rule that night (buys only). */
   readonly quality?: GateRule;
+  /** Options sentiment P2: decide on the night's scores with options OFF (EngineRead.optionsOff) — the twin account. */
+  readonly optionsOff?: boolean;
 }
 /** Each model's best setup (bestSetupCli, 2026-10-28). */
 export const LAB_SETUPS: readonly LabSetup[] = [
@@ -190,6 +193,17 @@ export const JAMES_QG_RULE: GateRule = { mode: 'scaled', mark: 4, outOf: 7 };
 export const JAMES_QG_SETUPS: readonly LabSetup[] = [
   { id: JAMES_QG_ID, label: 'James — Quality Gate on Trend 200 (list, 3 stocks; buys only stocks scoring 4 of 7 of the known items)', model: 'trend', slots: 3, sell: 'own', trendDays: 200, quality: JAMES_QG_RULE },
 ];
+/**
+ * Options sentiment P2 (A-9, section 5 T2): "Engine, options off", the twin of lab.engine (same rules: the list, 3
+ * stocks, 200-day sell) deciding on the SAME night's analysis with options OFF (EngineRead.optionsOff). It joins on
+ * the first night the read is applied (profile `options.applied`; that day is kept as lab.optionsLive, the go-live date)
+ * and is judged against "📊 QQQ since this account joined" (G8). The options effect = lab.engine minus this account
+ * from that day. No LEAPS twin. Never runs while the read is in shadow, so the other accounts are untouched.
+ */
+export const OPTIONS_OFF_ID = 'lab.engine.optionsOff';
+export const OPTIONS_OFF_SETUPS: readonly LabSetup[] = [
+  { id: OPTIONS_OFF_ID, label: 'Engine, options off (list, 3 stocks, 200-day sell)', model: 'engine', slots: 3, sell: 'trend200', trendDays: 200, optionsOff: true },
+];
 /** James's share accounts run by the lab's own loop (lab.james). */
 export const JAMES_SHARE_SETUPS: readonly LabSetup[] = [...JAMES_PT_SETUPS, ...JAMES_QG_SETUPS];
 /** Every James account id, in report order. */
@@ -199,11 +213,11 @@ export const JAMES_IDS: readonly string[] = [JAMES_LILO_V2_ID, ...JAMES_PT_SETUP
 export const leapsId = (setupId: string): string => 'leaps.' + setupId.slice('lab.'.length);
 export const LEAPS_IDS: readonly string[] = LAB_SETUPS.map((s) => leapsId(s.id));
 export const LAB_LABEL: Readonly<Record<string, string>> = {
-  ...Object.fromEntries(LAB_SETUPS.map((s) => [s.id, s.label])), [LILO_ID]: LILO_LABEL,
+  ...Object.fromEntries([...LAB_SETUPS, ...OPTIONS_OFF_SETUPS].map((s) => [s.id, s.label])), [LILO_ID]: LILO_LABEL,
   ...Object.fromEntries(LAB_SETUPS.map((s) => [leapsId(s.id), s.label.replace(' (list', ' LEAPS (list')])),
   [ALL_ID]: ALL_LABEL, [ALL_SHARES.id]: ALL_SHARES.label, [ALL_LEAPS_ID]: 'Everything together, LEAPS half',
   [JAMES_LILO_V2_ID]: JAMES_LILO_V2_LABEL, ...Object.fromEntries(JAMES_SHARE_SETUPS.map((s) => [s.id, s.label])), [JAMES_PT_LIST14_ID]: JAMES_PT_LIST14_LABEL, ...JAMES2_LABEL, ...JAMES3_LABEL,
-  ...JAMES_LEAPS_LABEL,
+  ...JAMES_LEAPS_LABEL, [CLAUDE_ID]: CLAUDE_LABEL,
 };
 
 /** `pt`: James — Profit-Taking's schedule on this position (accounts with `profitTaking` only). */
@@ -242,6 +256,10 @@ export interface LabState {
   marketMaker?: SignalBook;
   /** James's models, phase 4: per James — LEAPS account, the market fire-sale episode (its first day) each stock was bought in. Its accounts live in `leaps`. */
   jamesLeapsBought?: Record<string, Record<string, string>>;
+  /** Options sentiment P2: the first day the options read was applied (go-live); "Engine, options off" joined then. */
+  optionsLive?: string;
+  /** 🤖 Claude, free choice (paperClaude.ts): its book; absent until the first order row is seen. It joins on its first fill. */
+  claude?: ClaudeBook;
 }
 
 /** The share account of a lab or James setup id (James's ids live in `lab.james`). */
@@ -269,6 +287,10 @@ export interface LabDayInput {
   } | null;
   /** G0b: the dated 10-year daily bars of the list and BTC-USD (paperJob LONG_BAR_TICKERS): James's layers are computed on them (else on `series`). */
   readonly long?: ReadonlyMap<string, PriceSeries>;
+  /** Options sentiment P2: the options read is applied tonight (profile `options.applied`): "Engine, options off" joins / runs. */
+  readonly optionsApplied?: boolean;
+  /** 🤖 Claude, free choice: tonight's '🤖 Claude Picks' rows and how to price them; absent = the account is not run tonight. */
+  readonly claude?: Omit<ClaudeNight, 'day' | 'fill'>;
 }
 
 const HOLD_OFF = new Set(['SPLIT', 'NO_CONSENSUS']);
@@ -281,6 +303,11 @@ export function labDay(lab: LabState, input: LabDayInput, o: { fill: boolean; de
   const openOf = (t: string): number | null => input.bars[t]?.open ?? null;
   const closeOf = (t: string): number | null => input.bars[t]?.close ?? null;
   const reads = new Map(input.reads.map((r) => [r.ticker, r]));
+  // Options sentiment P2: the twin "Engine, options off" reads the same night with options OFF (when the run has them).
+  const readOf = (st: LabSetup, t: string): EngineRead | undefined => {
+    const r = reads.get(t);
+    return r && st.optionsOff && r.optionsOff ? { ...r, finalConviction: r.optionsOff.finalConviction, timing: r.optionsOff.timing, action: r.optionsOff.action } : r;
+  };
   const trendCache = new Map<string, TrendDay | null>();
   const trendOn = (t: string, days: number): TrendDay | null => {
     const k = t + '|' + days;
@@ -301,7 +328,7 @@ export function labDay(lab: LabState, input: LabDayInput, o: { fill: boolean; de
   const dirOf = (m: string, t: string): string | null => (m === 'wyckoff' ? wyOn(t) : (reads.get(t)?.directions?.[m] ?? null));
   const says = (st: LabSetup, t: string, side: 'buy' | 'sell', a: LabAccount): boolean => {
     const want = side === 'buy' ? 'bullish' : 'cautionary';
-    const r = reads.get(t);
+    const r = readOf(st, t);
     if (st.model === 'engine' || st.model === 'current') {
       if (side === 'buy') return !!r && r.ok && r.finalConviction != null && (r.timing === 'BUY_NOW' || r.finalConviction >= 70) && (st.model === 'engine' || !HOLD_OFF.has(String(r.verdict)));
       const p = a.pos[t]; if (!p) return false;
@@ -317,7 +344,7 @@ export function labDay(lab: LabState, input: LabDayInput, o: { fill: boolean; de
     return dirOf(st.model, t) === want;
   };
   const rankOf = (st: LabSetup, t: string): number => {
-    const r = reads.get(t);
+    const r = readOf(st, t);
     if (st.model === 'engine' || st.model === 'current' || st.model === 'best') return (r?.finalConviction ?? 0) + (r?.timing === 'BUY_NOW' ? 1000 : 0);
     return trendOn(t, st.trendDays)?.strength ?? -1;
   };
@@ -345,7 +372,9 @@ export function labDay(lab: LabState, input: LabDayInput, o: { fill: boolean; de
     const fails = sc.items.filter((x) => x.state === 'fail').map((x) => x.name.toLowerCase()), unknown = sc.items.filter((x) => x.state === 'unknown').length;
     return { pass: (g) => passesGate(sc, g), line: 'quality ' + sc.points + '/' + sc.known + ' known of 7' + (fails.length ? ': fails ' + fails.join(', ') : '') + (unknown ? ' (' + unknown + ' unknown)' : '') };
   };
-  for (const st of [...STOCK_SETUPS, ...JAMES_SHARE_SETUPS]) {
+  // Options sentiment P2: the go-live day is kept; the twin "Engine, options off" runs from then on.
+  if (input.optionsApplied && o.decide && !lab.optionsLive) lab.optionsLive = d;
+  for (const st of [...STOCK_SETUPS, ...JAMES_SHARE_SETUPS, ...(lab.optionsLive ? OPTIONS_OFF_SETUPS : [])]) {
     // An account that joins tonight only decides; its first fills are at the next open.
     const home = st.id.startsWith('james.') ? (lab.james ??= {}) : lab.accounts;
     const joining = !home[st.id];
@@ -484,6 +513,12 @@ export function labDay(lab: LabState, input: LabDayInput, o: { fill: boolean; de
   james2Day(lab, input, o, trades, longOf);
   james3Day(lab, input, o, trades, longOf);
   jamesLeapsDay(lab, input, o, trades, longOf);
+  // 🤖 Claude, free choice: its orders from the tab (the book is made when the first row is seen)
+  const cl = input.claude;
+  if (cl && (lab.claude || cl.rows.length)) {
+    const b = lab.claude ??= newClaudeBook(o.cash);
+    for (const x of claudeDay(b, { ...cl, day: d, fill: o.fill })) trades.push({ day: d, strategy: CLAUDE_ID, side: x.side, ticker: x.ticker, shares: x.shares, price: x.price, value: x.value, tax: x.tax, why: x.why });
+  }
   return trades;
 }
 
@@ -710,7 +745,7 @@ const afterTax = (cash: number, items: Array<[number, number, number | null]>): 
 /** Values after the tax on what is still held, per research account plus the list benchmark ('lab.list'). */
 export function labValues(lab: LabState, closeOf: (t: string) => number | null): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const st of LAB_SETUPS) { const a = lab.accounts[st.id]; if (a) out[st.id] = afterTax(a.cash, Object.entries(a.pos).map(([t, p]) => [p.shares, p.cost, closeOf(t)])); }
+  for (const st of [...LAB_SETUPS, ...OPTIONS_OFF_SETUPS]) { const a = lab.accounts[st.id]; if (a) out[st.id] = afterTax(a.cash, Object.entries(a.pos).map(([t, p]) => [p.shares, p.cost, closeOf(t)])); }
   if (lab.lilo) out[LILO_ID] = liloValue(lab.lilo, closeOf);
   for (const [id, a] of Object.entries(lab.leaps ?? {})) out[id] = leapsValue(a, closeOf('QQQ'), closeOf);
   const all = lab.accounts[ALL_SHARES.id];
@@ -728,6 +763,8 @@ export function labValues(lab: LabState, closeOf: (t: string) => number | null):
   if (lab.cycle) out[JAMES_CYCLE_ID] = cycleValue(lab.cycle, closeOf);
   if (lab.cycleBtc) out[JAMES_CYCLE_BTC_ID] = btcSleeveValue(lab.cycleBtc, BTC_SLEEVE_DEFAULT, closeOf);
   if (lab.marketMaker) out[JAMES_MM_ID] = signalValue(lab.marketMaker, closeOf);
+  // 🤖 Claude, free choice: from its first fill
+  if (lab.claude?.joined) out[CLAUDE_ID] = claudeValue(lab.claude, closeOf);
   return out;
 }
 
@@ -742,4 +779,4 @@ export function james2Held(lab: LabState, id: string): string[] | null {
   return null;
 }
 
-export const labHeld = (lab: LabState, id: string): string[] => james2Held(lab, id) ?? (id === JAMES_LILO_V2_ID ? (lab.liloV2 ? [...liloV2Held(lab.liloV2), ...(lab.liloV2.qqq.shares ? ['QQQ'] : [])] : []) : id === ALL_ID ? [...new Set([...labHeld(lab, ALL_SHARES.id), ...labHeld(lab, ALL_LEAPS_ID)])].sort() : lab.leaps?.[id] ? [...leapsHeld(lab.leaps[id]!), ...(lab.leaps[id]!.qqq.shares ? ['QQQ'] : [])] : id === LILO_ID ? (lab.lilo ? [...liloHeld(lab.lilo), ...(lab.lilo.qqq.shares ? ['QQQ'] : [])] : []) : Object.keys(labAccount(lab, id)?.pos ?? {}).sort());
+export const labHeld = (lab: LabState, id: string): string[] => id === CLAUDE_ID ? (lab.claude ? claudeHeld(lab.claude) : []) : james2Held(lab, id) ?? (id === JAMES_LILO_V2_ID ? (lab.liloV2 ? [...liloV2Held(lab.liloV2), ...(lab.liloV2.qqq.shares ? ['QQQ'] : [])] : []) : id === ALL_ID ? [...new Set([...labHeld(lab, ALL_SHARES.id), ...labHeld(lab, ALL_LEAPS_ID)])].sort() : lab.leaps?.[id] ? [...leapsHeld(lab.leaps[id]!), ...(lab.leaps[id]!.qqq.shares ? ['QQQ'] : [])] : id === LILO_ID ? (lab.lilo ? [...liloHeld(lab.lilo), ...(lab.lilo.qqq.shares ? ['QQQ'] : [])] : []) : Object.keys(labAccount(lab, id)?.pos ?? {}).sort());
