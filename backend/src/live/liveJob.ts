@@ -34,6 +34,8 @@ export interface LiveJobDeps {
   readonly timeZone: string;
   readonly fetchChart: (t: string) => Promise<FetchedChart | null>;
   readonly log: (m: string) => void;
+  /** Fix 2026-11-07: the night's report text, always INFO (its ✅ / ❌ marks rate a strategy, they are not failures). Default `log`. */
+  readonly logReport?: (m: string) => void;
   readonly config: LiveConfig;
   /** Tests: the clock. */
   readonly now?: () => number;
@@ -175,7 +177,8 @@ export async function runLiveDryRun(d: LiveJobDeps): Promise<string> {
   const n = await planLiveNight(d);
   // Fix 2026-11-06: one line at a time, so each line gets its own level (the whole text was one ERROR line when any
   // single line carried a failure mark, e.g. a ❌ next to one stock).
-  if (n.message) for (const line of n.message.split('\n')) if (line.trim()) d.log(line);
+  const report = d.logReport ?? d.log;
+  if (n.message) for (const line of n.message.split('\n')) if (line.trim()) report(line);
   if (d.telegram && n.message) await notifyIfNeeded(d.telegram, liveAttention(n, n.alerts ?? []), (m) => d.log('live bot: ' + m));
   return n.outcome;
 }

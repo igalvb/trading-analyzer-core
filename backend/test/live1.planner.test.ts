@@ -471,6 +471,12 @@ describe('1.4 and 1.6: the 💵 Live Log and the nightly dry run', () => {
     assert.match(text, /Fee report/);
     assert.match(text, /no broker is connected/);
     assert.equal(fresh.sent.length, 0);
+    // Fix 2026-11-07: with logReport the report text goes there (INFO in the Nightly), none of it to the leveled log.
+    const reported: string[] = [], leveled: string[] = [];
+    const third = await setup();
+    await runLiveDryRun({ ...third.deps, log: (m: string) => leveled.push(m), logReport: (m: string) => reported.push(m) });
+    assert.ok(reported.some((l) => l.startsWith('💵 Live bot')) && reported.some((l) => /Fee report/.test(l)), 'the report lines');
+    assert.equal(leveled.filter((l) => l.startsWith('💵 Live bot') || /Fee report/.test(l)).length, 0, 'no report line on the leveled log');
   });
 
   test('the log is idempotent per day: a re-run writes nothing and sends nothing; the next night starts from the planned positions', async () => {
