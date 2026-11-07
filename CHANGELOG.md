@@ -10,6 +10,15 @@ The shared core's releases. Version numbers are MAJOR.MINOR.PATCH (the `VERSION`
 
 Each release: a section `## vX.Y.Z (date)` with Added / Changed / Fixed / Action needed (MAJOR only).
 
+## v2.0.1 (2026-11-07)
+
+PATCH: a bug fix. Nothing to do.
+
+### Fixed
+
+- Live bot: the night's report text is logged at INFO. Its ❌ marks a strategy that does not beat both yardsticks;
+  it was logged as 8 ERROR lines a night, so the run's error count was wrong.
+
 ## v2.0.0 (2026-11-06)
 
 MAJOR: one command was removed from the Telegram relay, so the relay must be re-pasted. Everything new is optional and

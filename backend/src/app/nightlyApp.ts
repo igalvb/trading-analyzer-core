@@ -313,7 +313,7 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
       const token = (process.env.TELEGRAM_BOT_TOKEN ?? '').trim(), chatId = (process.env.TELEGRAM_CHAT_ID ?? '').trim();
       // docs/LOGGING_SPEC.md: a failed dry run is an ERROR line in the live.dryRun scope (raw text in detail), never INFO.
       const line = await orElseAsync(ctx.log.child('live.dryRun'), 'live bot dry run (nothing is traded in this phase)', () => runLiveDryRun({
-        store: s.tabStore, timeZone: s.timeZone, fetchChart: (t) => s.fetchChart(t), log, now: () => s.clock.now(),
+        store: s.tabStore, timeZone: s.timeZone, fetchChart: (t) => s.fetchChart(t), log, logReport: (m) => ctx.log.child('live.dryRun').info(m), now: () => s.clock.now(),
         config: liveConfigFromEnv(process.env), telegram: token && chatId ? { deps: { token }, chatId } : null,
       }), null, 'error');
       if (line === null) return { state: 'degraded', reason: 'The live bot dry run failed tonight; nothing is traded in this phase (no broker is connected).' };
