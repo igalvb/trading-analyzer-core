@@ -26,6 +26,20 @@ refuses a newer schema and a broken file with one plain line naming the file. Mo
 dates are `YYYY-MM-DD`. Additive fields (2026-11-06): `LedgerAsset.person` (whose item), `LedgerAsset.savingsType`
 (the sheet's own word for it).
 
+### Dated purchase lots (additive 2026-11-07)
+
+`LedgerStock.lots?: {date: string | null; qty; price; note?}[]` (backend/src/ledger/lots.ts): the buys that make up a
+holding, as the broker shows them. After a split, the post-split numbers, the old ones in `note` ("pre-split 3 @ 1423").
+
+| Rule | |
+|---|---|
+| Quantity | the lots hold at most `qty` (the dashboard refuses more) |
+| The rest | `qty` minus the lots is ONE implicit undated lot, priced so the total cost stays `qty` x `avgCost`; computed, never stored |
+| A check | a negative implied price, one above 10x `avgCost`, lots over `qty`, or lots that hold all of `qty` but cost more than 0.5% off `qty` x `avgCost`: the rest shows no price and the net worth screen lists a "To check" line (`NetWorth.checks`) |
+| `bought` | absent / null = the earliest dated lot (`boughtOf`; the dashboard's "Bought") |
+| The runs | unchanged: toPortfolio.ts reads `qty`, `avgCost` and `bought` only, so lots never move a verdict, a score or the shadow comparison |
+| Edits | dashboard `kind: 'lot'` (add / remove), one commit + a LedgerEdit line (docs/DASHBOARD.md); a change keeps the lots; a sale shrinks the lots that no longer fit, earliest first |
+
 The runs find the branch's folder through `DATA_BRANCH_DIR` (default `../data-branch` from `backend/`, which is where
 the Nightly checks the branch out).
 

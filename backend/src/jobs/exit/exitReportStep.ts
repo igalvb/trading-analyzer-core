@@ -12,7 +12,7 @@ import { reportSentence } from '../../core/result.ts';
 import type { BullPhaseAdvisory } from '../../reports/exit/exitReport.ts';
 import { buildExitSheet } from '../../reports/exitSheet/exitSheet.ts';
 import type { ExitSheetDeps, ExitSheetResult } from '../../reports/exitSheet/exitSheet.ts';
-import type { ExitReportInput } from '../../reports/exitSheet/types.ts';
+import type { BusinessAlertsView, ExitReportInput } from '../../reports/exitSheet/types.ts';
 import type { ReportWorkbook } from '../../sheets/reportSheet.ts';
 import type { JobOutcome, NightlyJob } from '../nightly/nightly.ts';
 import { toExitReportInput } from './exitReportAdapter.ts';
@@ -25,6 +25,7 @@ import { REPORT_TIME_ZONE } from '../../reports/messages/catalog.ts';
 import type { ExitPipelineDeps, ExitPipelineOptions, ExitPipelineResult } from './exitPipeline.ts';
 
 export const EXIT_REPORT_STEP_KEY = 'exit.report' as const;
+const UNAVAILABLE_BUSINESS_ALERTS: BusinessAlertsView = { mode: 'shadow', intro: [], market: { alert: false, text: '' }, holdings: [], unavailable: true };
 
 export interface ExitReportJobDeps {
   readonly ctx: RunContext;
@@ -42,6 +43,12 @@ export interface ExitReportJobDeps {
   readonly onBuilt?: (input: ExitReportInput, result: ExitSheetResult, workbook: ReportWorkbook) => void;
   /** Extra display lines (options sentiment: the market line). A throw is logged; the report is built without them. */
   readonly decorate?: (input: ExitReportInput) => Promise<ExitReportInput> | ExitReportInput;
+  /**
+   * Owner 2026-11-07 (profile exit.businessAlerts shadow / on; absent = off): the business alerts section
+   * (businessAlerts.ts runBusinessAlerts). Display, run log and Telegram only: never read by a verdict. A throw is
+   * logged and the section says it could not be built; the report and the step outcome are otherwise unchanged.
+   */
+  readonly businessAlerts?: (ctx: RunContext, run: ExitPipelineResult) => Promise<BusinessAlertsView>;
 }
 
 export function describeExitOutcome(failed: number, degraded: number, total: number): JobOutcome {
@@ -69,6 +76,12 @@ export function exitReportJob(d: ExitReportJobDeps): NightlyJob {
       else advisoryUnavailable = 'SECTION_UNAVAILABLE';
     }
 
+    let business: BusinessAlertsView | null = null;
+    if (d.businessAlerts) {
+      const biz = d.businessAlerts;
+      business = await orElseAsync(ctx.log, 'exit report: business alerts (section shown as not built)', () => biz(ctx, run), UNAVAILABLE_BUSINESS_ALERTS);
+    }
+
     const ss = await d.openWorkbook();
     // F-X2: the sell plans, continued from the remembered plan. A history tab that cannot be read or written costs
     // the memory only: the plans are still shown (fresh), the report says the saved targets were not available.
@@ -88,6 +101,7 @@ export function exitReportJob(d: ExitReportJobDeps): NightlyJob {
     let input = toExitReportInput(run, {
       ...(d.adapter ?? {}), advisory, ...(advisoryUnavailable ? { advisoryUnavailable } : {}),
       sellPlans: plans.byHolding, ...(memoryUnavailable ? { targetMemoryUnavailable: true } : {}),
+      ...(business ? { businessAlerts: business } : {}),
     });
     if (d.decorate) { const deco = d.decorate, plain = input; input = await orElseAsync(ctx.log, 'exit report: extra display lines (skipped)', async () => deco(plain), plain); }
     const res = buildExitSheet(ss, input, { log: textLog(ctx.log), ...(d.sheet ?? {}) });

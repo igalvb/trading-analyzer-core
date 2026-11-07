@@ -472,3 +472,32 @@ describe('options sentiment (shadow A-8, part B): display lines only', () => {
     assert.deepEqual(grid(b.be), grid(a.be));
   });
 });
+
+describe('the Washout ADD alert line (profile alerts.washout, display only)', () => {
+  test('one line per washout; tiers and order unchanged; no lines = the same report', async () => {
+    const base = await nightly(input());
+    const w = '🟢 Washout: NVDA closed 2.7 SD under its 20-day average, 41% off its high, long trend still rising — an add level (long-term, no stop). Loan bar: beats QQQ? · market: bull.';
+    const withLine = await nightly(input({ washoutLines: [w] }));
+    assert.deepEqual(withLine.res.order, base.res.order);
+    assert.deepEqual(withLine.res.tiers, base.res.tiers);
+    const text = allText(withLine.be);
+    assert.ok(text.includes(w));
+    const noRows = (t: string): string => t.replace(/\brow \d+/g, 'row N');
+    assert.deepEqual(text.filter((t) => t !== '' && t !== w).map(noRows), allText(base.be).filter((t) => t !== '').map(noRows));
+    assert.deepEqual(grid((await nightly(input({ washoutLines: [] }))).be), grid(base.be));
+  });
+});
+
+describe('the event check block (profile alerts.eventCheck, display only)', () => {
+  test('heading + lines; tiers and order unchanged; no lines / absent = the same report', async () => {
+    const base = await nightly(input());
+    const ev = { heading: '⚡ Event check (display only: no rule or score changes)', lines: ['Market: QQQ −6.0% in 5 days: market-wide (8 of 9 sectors down).', 'Verdict: likely short (sell-the-news / panic). Sizing: normal $5k per stock.'] };
+    const withBlock = await nightly(input({ eventCheck: ev }));
+    assert.deepEqual(withBlock.res.order, base.res.order);
+    assert.deepEqual(withBlock.res.tiers, base.res.tiers);
+    const text = allText(withBlock.be);
+    for (const l of [ev.heading, ...ev.lines]) assert.ok(text.includes(l), l);
+    assert.deepEqual(grid((await nightly(input({ eventCheck: { heading: ev.heading, lines: [] } }))).be), grid(base.be));
+    assert.deepEqual(grid((await nightly(input({ eventCheck: null }))).be), grid(base.be));
+  });
+});

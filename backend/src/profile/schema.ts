@@ -93,8 +93,11 @@ export interface Profile {
    * Owner 2026-11-05: `weeklyStops` = the Exit report decides from the weekly chart and the owner's exit rules (stale
    * daily breach is an old signal, weekly chandelier stop, EXIT only on a large expected fall net of tax, coherent
    * targets, trims only at +25% after tax). Default false (built OFF; switched on after the owner sees the table).
+   * Owner 2026-11-07: `businessAlerts` = the business-based exit alerts (jobs/exit/businessAlerts.ts): 'off' (default)
+   * = not computed; 'shadow' = a section in the Exit report and lines in the run log, no Telegram; 'on' = the same plus
+   * ONE Telegram line per new alert (once per 30 days per stock and alert). Never changes a verdict, a score or a rule.
    */
-  readonly exit: { readonly weeklyStops: boolean };
+  readonly exit: { readonly weeklyStops: boolean; readonly businessAlerts: BusinessAlertsMode };
   /**
    * Options go-live (docs/OPTIONS_SENTIMENT_PLAN.md P2 / A-9, C-1) with the weights of
    * docs/OPTIONS_WEIGHTS_DUE_DILIGENCE_2026-11-06.md: `applied` = every nightly stock gets its own gated read, SHOWN
@@ -117,6 +120,15 @@ export interface Profile {
    * Default 'off' (no fetch at all). Revert = set it back.
    */
   readonly ledger: { readonly cryptoPrices: CryptoPricesMode };
+  /**
+   * Owner 2026-11-07: `washout` 'on' = the nightly Washout ADD alert (jobs/washout/washoutAlert.ts): one Telegram line
+   * per held or watchlist stock whose W1 washout fires with Strong fundamentals (at most one per stock per 10 trading
+   * days), a line in the Buy report. Display and alert only. Default 'off' (nothing at all). Revert = set it back.
+   * Owner 2026-11-07: `eventCheck` 'on' = the event check (jobs/washout/eventCheck.ts): on a sharp market or stock fall,
+   * the fall's type (market / sector / company), the long-fall signals and a one-line verdict with the sizing hint,
+   * next to each washout line and in an "Event check" block of the Buy report. Display only. Default 'off'.
+   */
+  readonly alerts: { readonly washout: AlertMode; readonly eventCheck: AlertMode };
   /** Absent = no live bot (the default for every user but the owner, open question Q5). */
   readonly live: LiveProfile | null;
   /** The results pack name (P4); null = "no history for your list yet". */
@@ -136,18 +148,23 @@ export const PROFILE_KEYS: readonly string[] = [
   'labels.listName', 'labels.holdResearchCore', 'labels.holdCore', 'labels.researchName',
   'sheets.protectedTabs', 'sheets.portfolio.headerAliases', 'sheets.portfolio.endMarkers.exact', 'sheets.portfolio.endMarkers.contains', 'sheets.portfolio.assumedPurchaseDate',
   'features.paper', 'features.liveBot', 'features.myOptions', 'features.ai',
-  'exit.weeklyStops',
+  'exit.weeklyStops', 'exit.businessAlerts',
   'options.applied',
   'storage.ledger',
   'ledger.cryptoPrices',
+  'alerts.washout', 'alerts.eventCheck',
   'live.follow', 'live.startValue', 'live.fractional', 'live.minTrade', 'live.maxOrders', 'live.capSlack', 'live.targetMode', 'live.alertFalls', 'live.allowList',
   'results',
 ];
 
 export const LEDGER_MODES = ['off', 'shadow', 'on'] as const;
+export const BUSINESS_ALERTS_MODES = ['off', 'shadow', 'on'] as const;
+export type BusinessAlertsMode = (typeof BUSINESS_ALERTS_MODES)[number];
 export type LedgerMode = (typeof LEDGER_MODES)[number];
 export const CRYPTO_PRICES_MODES = ['off', 'on'] as const;
 export type CryptoPricesMode = (typeof CRYPTO_PRICES_MODES)[number];
+export const ALERT_MODES = ['off', 'on'] as const;
+export type AlertMode = (typeof ALERT_MODES)[number];
 
 export const MAX_CORE_TICKERS = 30;
 export const MAX_TAX_RATE = 0.6;
@@ -272,7 +289,9 @@ export function validateProfile(input: unknown): ProfileResult {
   const endMarkers = { exact: texts('sheets.portfolio.endMarkers.exact', []), contains: texts('sheets.portfolio.endMarkers.contains', ['CLOSED']) };
   const assumedPurchaseDate = str('sheets.portfolio.assumedPurchaseDate', false, DAY) ?? '2020-01-01';
 
-  const exit = { weeklyStops: bool('exit.weeklyStops', false) };
+  const bizMode = str('exit.businessAlerts', false) ?? 'off';
+  if (!(BUSINESS_ALERTS_MODES as readonly string[]).includes(bizMode)) errors.push('exit.businessAlerts must be one of ' + BUSINESS_ALERTS_MODES.join(', '));
+  const exit = { weeklyStops: bool('exit.weeklyStops', false), businessAlerts: (BUSINESS_ALERTS_MODES as readonly string[]).includes(bizMode) ? bizMode as BusinessAlertsMode : 'off' as const };
   const options = { applied: bool('options.applied', false) };
   const ledgerMode = str('storage.ledger', false) ?? 'off';
   if (!(LEDGER_MODES as readonly string[]).includes(ledgerMode)) errors.push('storage.ledger must be one of ' + LEDGER_MODES.join(', '));
@@ -280,6 +299,12 @@ export function validateProfile(input: unknown): ProfileResult {
   const cryptoMode = str('ledger.cryptoPrices', false) ?? 'off';
   if (!(CRYPTO_PRICES_MODES as readonly string[]).includes(cryptoMode)) errors.push('ledger.cryptoPrices must be one of ' + CRYPTO_PRICES_MODES.join(', '));
   const ledger = { cryptoPrices: (CRYPTO_PRICES_MODES as readonly string[]).includes(cryptoMode) ? cryptoMode as CryptoPricesMode : 'off' };
+  const washoutMode = str('alerts.washout', false) ?? 'off';
+  if (!(ALERT_MODES as readonly string[]).includes(washoutMode)) errors.push('alerts.washout must be one of ' + ALERT_MODES.join(', '));
+  const eventMode = str('alerts.eventCheck', false) ?? 'off';
+  if (!(ALERT_MODES as readonly string[]).includes(eventMode)) errors.push('alerts.eventCheck must be one of ' + ALERT_MODES.join(', '));
+  const alertMode = (m: string): AlertMode => ((ALERT_MODES as readonly string[]).includes(m) ? m as AlertMode : 'off');
+  const alerts = { washout: alertMode(washoutMode), eventCheck: alertMode(eventMode) };
   const features = { paper: bool('features.paper', true), liveBot: bool('features.liveBot', false), myOptions: bool('features.myOptions', true), ai: bool('features.ai', false) };
 
   let live: LiveProfile | null = null;
@@ -310,7 +335,7 @@ export function validateProfile(input: unknown): ProfileResult {
       version, user: { id, timeZone }, lists: { core, researchCore, pickers, watchlistSeed },
       paper: { start, end, fixedUniverse }, research: { testAUniverse, universe, extraTickers }, models: { pairs }, tax: { rate },
       benchmarks: { index }, labels: { listName, holdResearchCore, holdCore, researchName },
-      sheets: { protectedTabs, portfolio: { headerAliases, endMarkers, assumedPurchaseDate } }, features, exit, options, storage, ledger, live, results,
+      sheets: { protectedTabs, portfolio: { headerAliases, endMarkers, assumedPurchaseDate } }, features, exit, options, storage, ledger, alerts, live, results,
     },
   };
 }

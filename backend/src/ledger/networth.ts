@@ -5,6 +5,9 @@
  *   buildNetWorth   every item the owner has (stocks, bitcoin funds, crypto, calls with today's live values; pension,
  *                   other funds, real estate net of its mortgage, cash as he last typed them), group totals and the
  *                   grand total in USD and ILS at the day's USD/ILS rate
+ *   netBalance      the same total split as assets (gross: markets, pension and funds, real estate's value, cash) and
+ *                   debts (mortgages; other debts = an item whose value is 0 and debt > 0, whatever its group): the
+ *                   page's top cards and its separate "Debt" line (the page carries a copy; the test holds them equal)
  *   buildGrowth     the snapshots (one line per day) and the money-in/out flows for the graph and its marks
  *   withoutFlows    "growth without deposits": the value minus the net money put in since the first day shown
  *                   (the page carries a copy of this function; test/dashboard.networth.test.ts holds them equal)
@@ -30,6 +33,7 @@ import {
   type Currency, type LedgerGroup, type LedgerHoldings, type LedgerAssets, type LedgerWatchlist, type LedgerFlow, type LedgerSnapshot,
   type LedgerStock, type LedgerOption, type LedgerAsset, type LedgerTargets, type LedgerPrices,
 } from './schema.ts';
+import { lotChecks } from './lots.ts';
 
 /** A static value older than this many days is shown amber ("update it"). */
 export const STALE_DAYS = 90;
@@ -128,6 +132,24 @@ export interface NetGroup {
   readonly stale: number;
 }
 
+/**
+ * The net worth as assets minus debts, in USD (debts negative; ILS beside when the rate is known). Display only: the
+ * total is the same number as NetWorth.total (assets + debts = total, to the cent).
+ */
+export interface NetBalance {
+  /** Gross: markets + pension and funds + real estate's value + cash (each item's positive part). */
+  readonly assetsUsd: number;
+  /** Real estate mortgages (negative or 0). */
+  readonly mortgagesUsd: number;
+  /** Debt items (value 0, debt > 0, any group), any other item's debt, and a negative value typed on an item (negative or 0). */
+  readonly otherDebtsUsd: number;
+  /** mortgagesUsd + otherDebtsUsd. */
+  readonly debtsUsd: number;
+  /** assetsUsd + debtsUsd. */
+  readonly netUsd: number;
+  readonly ils: { readonly assets: number; readonly mortgages: number; readonly otherDebts: number; readonly debts: number; readonly net: number } | null;
+}
+
 export interface NetWorth {
   readonly asOf: string;
   readonly fx: NetFx | null;
@@ -139,9 +161,13 @@ export interface NetWorth {
   readonly ledgerUpdated: string | null;
   readonly subTypes: readonly NetSubType[];
   readonly totals: NetTotals;
+  /** The same total as assets minus debts (the page's top cards). */
+  readonly balance: NetBalance;
   readonly persons: readonly NetPerson[];
   /** Absent when ledger/targets.json is not there. */
   readonly ratios?: readonly NetRatio[];
+  /** Additive 2026-11-07: holdings whose dated lots do not add up (ledger/lots.ts lotChecks), "TICKER: ..."; absent = none. */
+  readonly checks?: readonly string[];
 }
 
 export interface GrowthFlow {
@@ -330,6 +356,34 @@ export function ratioCards(targets: LedgerTargets, items: readonly NetItem[], pr
   });
 }
 
+/** A debt line of its own: an item whose value is 0 and whose debt is above 0, whatever its group. */
+export function isDebtItem(x: Pick<NetItem, 'value' | 'debt'>): boolean {
+  return x.value === 0 && fin(x.debt) && x.debt > 0;
+}
+
+/**
+ * Assets and debts of the priced items (the same items as the total: an item without a USD value is left out of both).
+ * Per item: its value (real estate: the property's value) is an asset, its debt a debt (real estate: a mortgage, any
+ * other group: an other debt); a negative value counts as an other debt. So assets + debts = the sum of the items' net.
+ */
+export function netBalance(items: readonly Pick<NetItem, 'group' | 'value' | 'debt' | 'net' | 'currency' | 'usd'>[], rate: number | null): NetBalance {
+  let assets = 0, mortgages = 0, other = 0;
+  for (const x of items) {
+    if (x.usd == null) continue;
+    const hasDebt = fin(x.debt) && x.debt !== 0;
+    const gross = hasDebt ? convert(x.value ?? 0, x.currency, rate)[0] ?? 0 : x.usd;
+    const debt = hasDebt ? gross - x.usd : 0;
+    if (gross >= 0) assets += gross; else other += gross;
+    if (x.group === 'realEstate') mortgages -= debt; else other -= debt;
+  }
+  const a = r2(assets) as number, m = r2(mortgages) as number, o = r2(other) as number, d = r2(m + o) as number, n = r2(assets + mortgages + other) as number;
+  const ok = rate != null && rate > 0;
+  return {
+    assetsUsd: a, mortgagesUsd: m, otherDebtsUsd: o, debtsUsd: d, netUsd: n,
+    ils: ok ? { assets: r2(a * rate) as number, mortgages: r2(m * rate) as number, otherDebts: r2(o * rate) as number, debts: r2(d * rate) as number, net: r2(n * rate) as number } : null,
+  };
+}
+
 export function buildNetWorth(input: NetWorthInput): NetWorth | null {
   const { ledger, live } = input;
   const snaps = latestSnapshots(ledger.snapshots ?? []);
@@ -415,13 +469,15 @@ export function buildNetWorth(input: NetWorthInput): NetWorth | null {
     : { portfolio: r2(o.portfolio * rate) as number, pension: r2(o.pension * rate) as number, funds: r2(o.funds * rate) as number, realEstate: r2(o.realEstate * rate) as number, debt: r2(o.debt * rate) as number, total: r2(o.total * rate) as number };
   const people = new Map<string, { count: number; usd: number }>();
   for (const x of items) if (x.person && x.usd != null) { const p = people.get(x.person) ?? { count: 0, usd: 0 }; p.count++; p.usd += x.usd; people.set(x.person, p); }
+  const checks = lotChecks((ledger.holdings?.stocks ?? []).filter((s) => s && typeof s.ticker === 'string' && fin(s.qty)), today);
   return {
-    asOf: today, fx, groups, items, subTypes: subTypeTotals(items), totals: { ...T, ils: ilsOf(T) },
+    asOf: today, fx, groups, items, subTypes: subTypeTotals(items), totals: { ...T, ils: ilsOf(T) }, balance: netBalance(items, rate),
     persons: [...people].map(([name, p]) => ({ name, count: p.count, usd: r2(p.usd) as number, ils: rate != null ? r2(p.usd * rate) : null })).sort((a, b) => b.usd - a.usd),
     ...(ledger.targets && Array.isArray(ledger.targets.items) ? { ratios: ratioCards(ledger.targets, items, input.prices ?? new Map()) } : {}),
     total: { usd: totalUsd, ils: rate != null ? r2(totalUsd * rate) : null, unpriced: groups.reduce((s, g) => s + g.unpriced, 0) },
     watchlist: Array.isArray(ledger.watchlist?.tickers) ? ledger.watchlist.tickers.filter((t) => typeof t === 'string') : null,
     ledgerUpdated: updated[updated.length - 1] ?? null,
+    ...(checks.length ? { checks } : {}),
   };
 }
 

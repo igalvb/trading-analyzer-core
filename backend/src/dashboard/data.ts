@@ -153,7 +153,12 @@ export interface DashBuyItem {
   readonly fundamentals: string; readonly timing: string; readonly zone: readonly [number, number] | null; readonly zoneText: string;
   readonly verdict: string; readonly verdictKey: string; readonly updated: string;
   readonly price: number | null; readonly zoneState: 'in' | 'above' | 'below' | null; readonly distancePct: number | null;
+  /** Tonight's Washout ADD alert line for this stock (the Buy report's "🟢 Washout:" line); absent when none. */
+  readonly washout?: string;
 }
+
+/** The Buy report's Washout ADD alert lines ("🟢 Washout: MU closed ..."), by ticker. */
+export const WASHOUT_LINE = /^🟢 Washout: ([A-Z0-9.^=-]{1,12}) /;
 
 export interface DashHistoryItem {
   readonly date: string | null; readonly year: number | null; readonly ticker: string; readonly label: string; readonly kind: 'stock' | 'call' | 'put' | 'other';
@@ -375,6 +380,8 @@ export function parseBuyReport(grid: Grid | null | undefined, prices: ReadonlyMa
   const at = findTable(rows, BUY_TEXT.rankingColumns.slice(0, 6));
   if (!at) return [];
   const out: DashBuyItem[] = [];
+  const wash = new Map<string, string>();
+  for (const row of rows) for (const c of row ?? []) { const w = WASHOUT_LINE.exec(s(c)); if (w) wash.set(w[1] as string, s(c).slice(0, 300)); }
   for (let r = at.row + 1; r < rows.length; r++) {
     const row = rows[r] ?? [];
     const head = s(row[at.col]);
@@ -393,6 +400,7 @@ export function parseBuyReport(grid: Grid | null | undefined, prices: ReadonlyMa
     out.push({
       rank: Number(m[1]), ticker, conviction: cm ? Number(cm[0]) : null, convictionText, fundamentals: s(row[at.col + 2]), timing: s(row[at.col + 3]),
       zone, zoneText, verdict, verdictKey: verdictKeyOf(verdict), updated: s(row[at.col + 7]), price, zoneState, distancePct,
+      ...(wash.has(ticker) ? { washout: wash.get(ticker) as string } : {}),
     });
   }
   return out;

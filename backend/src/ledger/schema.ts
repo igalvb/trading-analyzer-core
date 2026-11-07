@@ -49,6 +49,25 @@ export interface LedgerStock {
    * the ticker without trailing dots. Read only when profile ledger.cryptoPrices is 'on'.
    */
   readonly priceSymbol?: string;
+  /**
+   * Added 2026-11-07 (dated purchase lots, additive): the buys that make up the holding, as the owner's broker shows
+   * them. Rule (ledger/lots.ts): the lots hold at most `qty`; the rest is ONE implicit undated lot priced so the total
+   * cost stays qty x avgCost (computed, never stored; a negative or absurd implied price is a check, not a number).
+   * `bought` absent / null = the earliest dated lot (lots.ts boughtOf). Display only: the runs keep reading qty and
+   * avgCost (toPortfolio.ts). Absent = no lots (the whole quantity is one lot bought on `bought` at avgCost).
+   */
+  readonly lots?: readonly LedgerLot[];
+}
+
+/** One dated purchase of a holding (LedgerStock.lots). After a split: post-split numbers, the old ones in `note`. */
+export interface LedgerLot {
+  /** 'YYYY-MM-DD'; null = an undated lot. */
+  readonly date: string | null;
+  /** Units bought (> 0). */
+  readonly qty: number;
+  /** Price paid per unit, in the holding's currency. */
+  readonly price: number;
+  readonly note?: string;
 }
 
 export interface LedgerOption {
@@ -184,12 +203,17 @@ export interface LedgerPrices {
   readonly prices: Readonly<Record<string, number>>;
 }
 
+/** The kinds of dashboard edit (dashboard/functions/api/edit.js LEDGER.editKinds mirrors this). */
+export const LEDGER_EDIT_KINDS = ['add', 'change', 'remove', 'sell', 'flow', 'watchlist', 'lot'] as const;
+export type LedgerEditKind = (typeof LEDGER_EDIT_KINDS)[number];
+
 /** One dashboard edit (the audit trail). `before` / `after` are the item as it was / is. */
 export interface LedgerEdit {
   readonly schema: number;
   readonly at: string;
   readonly by: string;
-  readonly kind: 'add' | 'change' | 'remove' | 'sell' | 'flow' | 'watchlist';
+  /** 'lot' (additive 2026-11-07): a dated purchase lot added to / removed from a holding (LedgerStock.lots). */
+  readonly kind: LedgerEditKind;
   readonly file: string;
   readonly itemId: string | null;
   readonly before: unknown;

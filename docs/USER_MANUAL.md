@@ -252,6 +252,8 @@ Tab `⚙️ Profile`, column A = Key, column B = Value. Format column B as **For
 | `features.ai` | `FALSE` | TRUE = you use the Gemini AI parts; the Setup Check then requires `GEMINI_API_KEY`. The AI parts run only when asked either way |
 | `features.liveBot` | `FALSE` | the live broker bot; not for new users. Leave FALSE |
 | `exit.weeklyStops` | `FALSE` | TRUE = the weekly-stop exit rules (§5) |
+| `exit.businessAlerts` | `off` | `shadow` = a "Business alerts (shadow)" section in the Exit report and lines in the run log (revenue growth turning negative, net margin, analyst rating / target, new SEC dilution filings, market shock); `on` = also ONE Telegram line per new alert (once per 30 days per stock and alert). Information only: never changes a verdict |
+| `alerts.eventCheck` | `off` | `on` = the event check: on a sharp fall (QQQ −5% in 5 days or −3% in a day; a held / watchlist stock −8% in a day or a washout) the fall's type (market-wide / sector / company-specific), the long-fall signs (cut forecasts, credit stress HYG vs IEF, rates TLT / 10-year, 5+ lower weeks) as yes / no / not known, a one-line verdict and the sizing hint, next to each washout line and in an "Event check" block of the Buy report; nothing on quiet nights. With `features.ai` and a Gemini key in the run, one "AI, unverified" sentence on the news cause. Display only: never changes a verdict |
 | `paper.start` | none | first day of the paper test, `YYYY-MM-DD`, a trading day (the next one is a good choice) |
 | `paper.end` | start + 1 year | last day of the paper test |
 | `paper.fixedUniverse` | = `lists.core` | stocks the paper **A original** accounts may buy (the Watchlist is added each night; §6) |

@@ -10,6 +10,24 @@ The shared core's releases. Version numbers are MAJOR.MINOR.PATCH (the `VERSION`
 
 Each release: a section `## vX.Y.Z (date)` with Added / Changed / Fixed / Action needed (MAJOR only).
 
+## v2.1.0 (2026-11-07)
+
+MINOR: new optional features, all off by default. Nothing to do.
+
+### Added
+
+- Washout ADD alert (profile `alerts.washout`): one Telegram line when a strong stock (fundamentals 70+) closes 2.5 SD
+  under its 20-day average, 20%+ off its 1-year high, with its 150-day average still rising; with the market regime
+  (bull / correction / bear). Deduped 10 trading days. Also a line in the Buy report and a dashboard badge.
+- Event check (profile `alerts.eventCheck`): on a sharp fall, the type (market / sector / company), the signs of a long
+  fall (forecast cuts, credit stress, rates, grinding prices) and a sizing hint, next to each washout line.
+- Business exit alerts (profile `exit.businessAlerts: off | shadow | on`): sales, margin, rating / target cuts, SEC
+  dilution hits; a market shock (VIX 35+ or QQQ −10% in 5 days) is a buy point, never an exit, sent even in shadow.
+- Ledger: dated purchase lots per holding (dashboard shows each lot with its gain and add/remove).
+- Dashboard: debts shown on their own line; net worth = assets − debts.
+- Nightly: a separate job appends the new bars to the long price history (`prices` branch only).
+- Research: washout buys and rotation inside your own list (docs/RESEARCH_WASHOUT_ROTATION_2026-11-07.md).
+
 ## v2.0.1 (2026-11-07)
 
 PATCH: a bug fix. Nothing to do.

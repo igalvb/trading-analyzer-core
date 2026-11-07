@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  buildNetWorth, buildGrowth, withoutFlows, readLedgerSources, latestFlows, convert, fxOn, subTypeTotals, ratioCards, STALE_DAYS, TARGETS_FILE,
+  buildNetWorth, buildGrowth, withoutFlows, readLedgerSources, netBalance, isDebtItem, latestFlows, convert, fxOn, subTypeTotals, ratioCards, STALE_DAYS, TARGETS_FILE,
   type LedgerSources, type LiveHolding,
 } from '../src/ledger/networth.ts';
 import { LEDGER_FILES, type LedgerFlow, type LedgerSnapshot } from '../src/ledger/schema.ts';
@@ -223,5 +223,60 @@ describe('net worth: ledger/prices.json (the Nightly\'s crypto prices, profile l
       const x = s3(p);
       assert.deepEqual([x.value, x.source], [40000, 'manual'], JSON.stringify(p));
     }
+  });
+});
+
+describe('net worth: assets and debts shown apart (display only: the total is unchanged)', () => {
+  // A separate debt line (value 0, debt > 0) kept in the cash group, as the migration's correction writes it.
+  const DEBT = { id: 'a9', group: 'cash' as const, name: 'Loan', value: 0, debt: 750000, currency: 'ILS' as const, asOf: '2026-11-05' };
+  const WITH: LedgerSources = { ...LEDGER, assets: { ...LEDGER.assets!, items: [...LEDGER.assets!.items, DEBT] } };
+  test('assets = gross (property value, cash positive part); debts = mortgages + other debts; assets + debts = the total', () => {
+    const before = buildNetWorth({ ledger: LEDGER, live: LIVE, nowMs: NOW })!;
+    const N = buildNetWorth({ ledger: WITH, live: LIVE, nowMs: NOW })!;
+    const B = N.balance;
+    assert.equal(N.total.usd, r2(before.total.usd - 750000 / 3.7), 'the number itself is unchanged by the display');
+    assert.equal(B.mortgagesUsd, r2(-800000 / 3.7));
+    assert.equal(B.otherDebtsUsd, r2(-750000 / 3.7));
+    assert.equal(B.debtsUsd, r2(B.mortgagesUsd + B.otherDebtsUsd));
+    assert.equal(B.assetsUsd, r2(1200 + 1000 + 40000 + 1600 + 100000 + 2000000 / 3.7 + 5000 + 20000));
+    assert.ok(Math.abs(B.assetsUsd + B.debtsUsd - N.total.usd) <= 0.02, 'assets - debts = net worth');
+    assert.equal(B.netUsd, r2(B.assetsUsd + B.debtsUsd));
+    assert.ok(Math.abs(B.ils!.otherDebts + 750000) < 0.05 && Math.abs(B.ils!.mortgages + 800000) < 0.05, 'ILS: through USD, to the cent');
+    assert.equal(N.groups.find((g) => g.id === 'cash')!.usd, r2(5000 - 750000 / 3.7), 'the group totals stay as they were');
+    assert.equal(before.balance.otherDebtsUsd, 0);
+  });
+  test('isDebtItem: value 0 and debt > 0, whatever the group; a property with a mortgage is not', () => {
+    assert.equal(isDebtItem({ value: 0, debt: 750000 }), true);
+    assert.equal(isDebtItem({ value: 0, debt: 0 }), false);
+    assert.equal(isDebtItem({ value: 0, debt: null }), false);
+    assert.equal(isDebtItem({ value: 2000000, debt: 800000 }), false);
+    assert.equal(isDebtItem({ value: null, debt: 5 }), false);
+    const items = [...WITH.assets!.items, { ...DEBT, id: 'a10', group: 'pension' as const, debt: 1000, currency: 'USD' as const }];
+    const N = buildNetWorth({ ledger: { ...WITH, assets: { ...WITH.assets!, items } }, live: LIVE, nowMs: NOW })!;
+    assert.equal(N.balance.otherDebtsUsd, r2(-750000 / 3.7 - 1000));
+  });
+  test('no rate: ILS items stay out of both sides, as out of the total; a negative typed value is a debt', () => {
+    const B = netBalance([
+      { group: 'cash', value: -50, debt: null, net: -50, currency: 'USD', usd: -50 },
+      { group: 'realEstate', value: 100, debt: 40, net: 60, currency: 'ILS', usd: null },
+      { group: 'stocks', value: 10, debt: null, net: 10, currency: 'USD', usd: 10 },
+    ], null);
+    assert.deepEqual(B, { assetsUsd: 10, mortgagesUsd: 0, otherDebtsUsd: -50, debtsUsd: -50, netUsd: -40, ils: null });
+  });
+  test("the page's copy of isDebtItem + netBalance gives the same answers; the page draws a Debt line and the cards", () => {
+    const html = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'dashboard', 'index.html'), 'utf8');
+    const m = /\/\* balance-math:start[^*]*\*\/([\s\S]*?)\/\* balance-math:end \*\//.exec(html);
+    assert.ok(m, 'markers in index.html');
+    const page = new Function(m[1] + '\nreturn { isDebtItem, netBalance };')() as { isDebtItem: typeof isDebtItem; netBalance: typeof netBalance };
+    for (const L of [LEDGER, WITH]) {
+      for (const fx of [3.7, null]) {
+        const N = buildNetWorth({ ledger: fx ? L : { ...L, snapshots: [] }, live: LIVE, nowMs: NOW })!;
+        assert.deepEqual(page.netBalance(N.items, fx), N.balance);
+        for (const x of N.items) assert.equal(page.isDebtItem(x), isDebtItem(x));
+      }
+    }
+    assert.match(html, /label: 'Debt'/);
+    assert.match(html, /\['Assets', /); assert.match(html, /\['Debts', /);
+    assert.match(html, /mortgage \$\{fmtC\(-re\[1\]/, 'real estate rows: value / mortgage / net');
   });
 });

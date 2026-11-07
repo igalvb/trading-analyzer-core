@@ -453,6 +453,20 @@ function checksRows(input: ExitReportInput): Row[] {
   return rows;
 }
 
+/** Owner 2026-11-07 (exit.businessAlerts shadow / on): the business-based alerts. Display only; absent = no section. */
+export const BUSINESS_ALERTS_HEADER = 'Business alerts (shadow)';
+function businessAlertsRows(input: ExitReportInput): Row[] {
+  const b = input.businessAlerts;
+  if (!b) return [];
+  const rows: Row[] = [band(BUSINESS_ALERTS_HEADER, '#4e342e', 12)];
+  if (b.unavailable) { rows.push(line(labelledReason('Business alerts', 'SECTION_UNAVAILABLE'))); return rows; }
+  for (const t of b.intro) rows.push(line(t, { italic: true, color: '#666666' }));
+  // A market shock is a buy point, never an exit (owner 2026-11-07): green, not the alert red.
+  rows.push(kv('Market', b.market.text, b.market.alert ? { bg: '#e8f5e9', bold: true } : {}));
+  for (const h of b.holdings) rows.push(kv(h.ticker, h.text, h.alert ? { bg: '#fdecea', bold: true } : {}));
+  return rows;
+}
+
 function footerRows(input: ExitReportInput, pct: number, hasShared: boolean): Row[] {
   const rows: Row[] = [band(T.footerHeader, '#546e7a', 12)];
   rows.push(line(T.taxBaseline(pct)));
@@ -509,6 +523,8 @@ export function buildExitSheet(ss: ReportWorkbook, input: ExitReportInput, deps:
     sections.push(safe(holdingLabel(s.h), i, () => holdingSection(s.h, i, s.tax ?? taxOf(s.h), ctx)));
   });
   sections.push(safe('Portfolio-wide checks', null, () => checksRows(input)));
+  const biz = safe(BUSINESS_ALERTS_HEADER, null, () => businessAlertsRows(input));
+  if (biz.length) sections.push(biz);
   sections.push(footerRows(input, pct, ctx.hasShared));
   const ai: Row[] = [
     { cells: [AI_ANCHOR], mergeFrom: 1, bg: '#6a1b9a', color: '#ffffff', bold: true, size: 13, height: 28, anchor: 'AI' },

@@ -131,7 +131,7 @@ describe('FL-8w (a) every workflow file has a sane YAML shape', () => {
   });
   test('nightly.yml: write access only in the ledger job, only to the data branch, only after a changed snapshot (docs/LEDGER.md)', () => {
     const t = readWorkflow('nightly.yml');
-    const [main, ledger] = [mainJob(t), t.slice(mainJob(t).length)];
+    const [main, ledger] = [mainJob(t), t.slice(mainJob(t).length).split(/^ {2}long-history:$/m)[0] as string];
     assert.match(main, /^permissions:\n {2}contents: read\n {2}actions: read$/m, 'the pipeline job stays read-only');
     assert.doesNotMatch(main, /contents: write|git push/, 'no write in the pipeline job');
     assert.match(ledger, /^ {2}ledger:\n {4}name: .*\n {4}needs: nightly\n {4}if: \$\{\{ !cancelled\(\) && needs\.nightly\.outputs\.ledger == 'yes' \}\}\n/m);
@@ -142,6 +142,26 @@ describe('FL-8w (a) every workflow file has a sane YAML shape', () => {
     assert.match(stepWith(main, 'Keep the ledger snapshot'), /git -C data-branch status --porcelain -- ledger\/snapshots\.jsonl/);
     assert.match(main, /ref: data\n {10}path: data-branch/);
     assert.doesNotMatch(t, /^ {2}(push|pull_request|schedule):/m, 'no new trigger');
+  });
+  test('nightly.yml: the long-history job appends after the pipeline, writes only the prices branch, never fails the Nightly (owner 2026-11-07)', () => {
+    const t = readWorkflow('nightly.yml');
+    const parts = t.split(/^ {2}long-history:$/m);
+    assert.equal(parts.length, 2, 'one long-history job');
+    const job = parts[1] as string;
+    assert.equal([...t.matchAll(/^ {2}([a-z-]+):\n {4}name:/gm)].map((m) => m[1]).join(','), 'nightly,ledger,long-history', 'the jobs, in order');
+    assert.match(job, /^\n {4}name: .*\n {4}needs: nightly\n {4}if: \$\{\{ !cancelled\(\) && \(inputs\.user \|\| 'owner'\) == 'owner' \}\}\n/, 'after the Nightly, owner runs only');
+    assert.match(job, /^ {4}continue-on-error: true$/m, 'a failure never fails the Nightly');
+    assert.match(job, /^ {4}permissions:\n {6}contents: write\n {4}steps:$/m, 'write scoped to this job, nothing else');
+    assert.doesNotMatch(job, /actions: (read|write)|secrets[.[]/, 'no secrets, no actions access');
+    assert.match(job, /ref: prices\n {10}path: prices-branch/);
+    assert.ok(job.includes('npm run long-history -- append "$dir"'), 'append mode, the default set');
+    assert.doesNotMatch(job, /long-history -- backfill/, 'never a full backfill from the Nightly');
+    assert.ok(job.includes("git status --porcelain -- 'prices/*.csv'") && job.indexOf("prices/*.csv'") < job.indexOf('git commit'), 'commits only when a CSV changed');
+    assert.equal(job.split('\n').filter((l) => /\bgit\b.*\bpush\b/.test(l)).length, 1, 'exactly one git push');
+    assert.ok(job.includes('git push -q origin HEAD:prices') && !/origin (HEAD:)?main\b/.test(t), 'only the prices branch, never main');
+    assert.match(stepWith(job, 'Failure notice'), /if: \$\{\{ failure\(\) \}\}\n[\s\S]*::warning::/, 'a failure is logged clearly');
+    assert.equal(t.split('\n').filter((l) => /contents: write/.test(l)).length, 2, 'write only in the ledger and long-history jobs');
+    assert.doesNotMatch(t, /^ {2}(push|pull_request|schedule|workflow_run|repository_dispatch):/m, 'no new trigger');
   });
   test('long-history.yml is manual only (docs/LONG_HISTORY_PLAN.md: no schedule, no push trigger)', () => {
     const t = readWorkflow('long-history.yml');

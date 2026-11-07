@@ -150,7 +150,8 @@ export const NIGHTLY: WorkflowSpec = {
   // Row 38: actions: read for the digest's "GitHub minutes this month" line (reports/digest/actionsMinutes.ts).
   actionsRead: true,
   secrets: ['GOOGLE_SERVICE_ACCOUNT_JSON', 'SPREADSHEET_ID', 'REPORTS_SPREADSHEET_ID', 'DATA_SPREADSHEET_ID', 'FMP_API_KEY', 'ALPHAVANTAGE_KEY', 'FINNHUB_KEY', 'SEC_CONTACT_EMAIL', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID'],
-  commands: ['npm run nightly', 'npm run lock-sheets', DASHBOARD_PUBLISH_COMMAND],
+  // docs/LONG_HISTORY_PLAN.md: the long-history job appends the new bars to the prices branch after the pipeline.
+  commands: ['npm run nightly', 'npm run lock-sheets', DASHBOARD_PUBLISH_COMMAND, 'npm run long-history'],
 };
 export const MY_OPTIONS: WorkflowSpec = {
   file: 'my-options.yml', crons: [MY_OPTIONS_CRON_EDT, MY_OPTIONS_CRON_EST], dispatch: true, timeoutMinutes: 15, concurrencyGroup: perUserGroup('my-options'), perUser: true, readsProfile: true,

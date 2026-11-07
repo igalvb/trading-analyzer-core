@@ -25,17 +25,20 @@ export const LEDGER = {
     flows: 'ledger/flows.jsonl', snapshots: 'ledger/snapshots.jsonl', edits: 'ledger/edits.jsonl', targets: 'ledger/targets.json', prices: 'ledger/prices.json',
   },
   groups: ['stocks', 'btcFunds', 'crypto', 'calls', 'pension', 'funds', 'realEstate', 'cash'],
+  editKinds: ['add', 'change', 'remove', 'sell', 'flow', 'watchlist', 'lot'],
 };
 const F = LEDGER.files;
 /** file -> the kinds allowed on it. */
 export const RULES = {
-  [F.holdings]: ['add', 'change', 'sell', 'remove'],
+  [F.holdings]: ['add', 'change', 'sell', 'remove', 'lot'],
   [F.assets]: ['add', 'change', 'remove'],
   [F.flows]: ['flow'],
   [F.watchlist]: ['watchlist'],
 };
 
 export const MAX_BODY_BYTES = 8192;
+/** Dated purchase lots per holding (schema.ts LedgerStock.lots), at most. */
+export const MAX_LOTS = 200;
 export const BAD_JSON = Symbol('bad json');
 export const parseJson = (text) => Promise.resolve().then(() => JSON.parse(text)).catch(() => BAD_JSON);
 const ACCESS_EMAIL_HEADER = 'Cf-Access-Authenticated-User-Email';
@@ -103,6 +106,9 @@ function specs(today) {
     flowDecide: { op: [true, oneOf('confirm', 'dismiss')], id: [true, id] },
     watchlist: { tickers: [true, (v) => !Array.isArray(v) ? 'must be a list' : v.length > 200 ? 'has more than 200 tickers' : v.some((t) => ticker(t)) ? 'has a bad ticker' : new Set(v).size !== v.length ? 'has a ticker twice' : null] },
     byId: { id: [true, id] },
+    // Dated purchase lots (additive 2026-11-07): add one to a holding, or remove one by its place AND its numbers.
+    lotAdd: { op: [true, oneOf('add')], id: [true, id], date: [true, dayOrNull(past)], qty: [true, num(0, 1e9, { gt: true })], price: [true, num(0, 1e7)], note: [false, text(120)] },
+    lotRemove: { op: [true, oneOf('remove')], id: [true, id], index: [true, num(0, MAX_LOTS - 1, { int: true })], date: [true, dayOrNull(null)], qty: [true, num(0, 1e9, { gt: true })], price: [true, num(0, 1e7)] },
   };
 }
 
@@ -123,12 +129,14 @@ export function validateEdit(body, today) {
   if (file === F.holdings) {
     if (kind === 'sell') spec = S.sell;
     else if (kind === 'remove') spec = S.byId;
+    else if (kind === 'lot') spec = isObj(it) && it.op === 'add' ? S.lotAdd : isObj(it) && it.op === 'remove' ? S.lotRemove : null;
     else {
       const t = isObj(it) ? it.type : null;
       spec = t === 'stock' ? S.stock : t === 'option' ? S.option : null;
       if (!spec) return { status: 400, message: 'type must be stock or option.' };
       if (kind === 'change') spec = { ...spec, id: [true, id] };
     }
+    if (!spec) return { status: 400, message: 'op must be add or remove.' };
   } else if (file === F.assets) spec = kind === 'remove' ? S.byId : kind === 'change' ? { ...S.asset, id: [true, id] } : S.asset;
   else if (file === F.flows) spec = isObj(it) && it.op === 'add' ? S.flowAdd : S.flowDecide;
   else spec = S.watchlist;
@@ -170,6 +178,23 @@ async function flowsById(t) {
     if (isObj(o) && typeof o.id === 'string') by.set(o.id, o);
   }
   return by;
+}
+
+const roundQty = (x) => Math.round(x * 1e8) / 1e8;
+const lotQty = (lots) => roundQty(lots.reduce((a, l) => a + (typeof l.qty === 'number' ? l.qty : 0), 0));
+const earliestLot = (lots) => lots.map((l) => l.date).filter((d) => typeof d === 'string' && d).sort()[0] ?? null;
+/** The lots kept when `left` units remain: while they hold more than `left`, the earliest dated lot (else an undated one) shrinks first. */
+function lotsAfterSale(lots, left) {
+  const out = lots.map((l) => ({ ...l }));
+  let over = roundQty(lotQty(out) - left);
+  const order = out.map((l, k) => k).sort((a, b) => { const da = out[a].date, db = out[b].date; return da == null ? (db == null ? a - b : 1) : db == null ? -1 : da < db ? -1 : da > db ? 1 : a - b; });
+  for (const k of order) {
+    if (over <= 1e-9) break;
+    const take = Math.min(out[k].qty, over);
+    out[k].qty = roundQty(out[k].qty - take);
+    over = roundQty(over - take);
+  }
+  return out.filter((l) => l.qty > 1e-9);
 }
 
 /**
@@ -226,11 +251,33 @@ export async function applyEdit(v, current, meta) {
   if (si < 0 && oi < 0) return fail(404, 'That holding was not found in the ledger.');
   const isOpt = oi >= 0, list = isOpt ? options : stocks, at = isOpt ? oi : si, before = list[at];
   if (kind === 'remove') { list.splice(at, 1); return done(item.id, before, null); }
+  const lots = !isOpt && Array.isArray(before.lots) ? before.lots.filter(isObj) : [];
+  if (kind === 'lot') {
+    if (isOpt) return fail(400, 'Lots are for stocks, bitcoin funds and coins, not options.');
+    if (item.op === 'add') {
+      if (lots.length >= MAX_LOTS) return fail(400, 'This holding has ' + MAX_LOTS + ' lots already.');
+      const inLots = lotQty(lots);
+      if (inLots + item.qty > before.qty + 1e-9) return fail(400, 'The lots would hold ' + roundQty(inLots + item.qty) + ', more than the ' + before.qty + ' you hold.');
+      const lot = { date: item.date, qty: item.qty, price: item.price, ...(item.note ? { note: item.note } : {}) };
+      const after = { ...before, lots: [...lots, lot] };
+      list[at] = after;
+      return done(item.id, before, after);
+    }
+    const had = lots[item.index];
+    if (!had || had.date !== item.date || had.qty !== item.qty || had.price !== item.price) return fail(409, 'That lot is not in the ledger as shown any more; reload and try again.');
+    const rest = lots.filter((_, k) => k !== item.index);
+    const after = { ...before };
+    if (rest.length) after.lots = rest; else delete after.lots;
+    list[at] = after;
+    return done(item.id, before, after);
+  }
   if (kind === 'change') {
     const { type, ...rest } = item;
     if ((type === 'option') !== isOpt) return fail(400, 'A stock cannot become an option (remove it and add the new one).');
+    // A holding's dated lots are changed with the lot edit only; they stay, and must still fit in the quantity.
+    if (lots.length && lotQty(lots) > rest.qty + 1e-9) return fail(400, 'Your dated lots hold ' + roundQty(lotQty(lots)) + '; remove a lot before setting the quantity to ' + rest.qty + '.');
     // Fields the runs write (an option's last market value) stay as they were.
-    const after = { ...rest, ...(isOpt && own(before, 'currentValue') ? { currentValue: before.currentValue } : {}) };
+    const after = { ...rest, ...(isOpt && own(before, 'currentValue') ? { currentValue: before.currentValue } : {}), ...(lots.length ? { lots } : {}) };
     list[at] = after;
     return done(item.id, before, after);
   }
@@ -245,12 +292,17 @@ export async function applyEdit(v, current, meta) {
     ...(isOpt ? { strike: before.strike, expiry: before.expiry } : {}),
     cost: typeof unitCost === 'number' ? Math.round(unitCost * item.qty * mult * 100) / 100 : null,
     proceeds: Math.round(item.price * item.qty * mult * 100) / 100, currency: isOpt ? 'USD' : before.currency === 'ILS' ? 'ILS' : 'USD',
-    bought: before.bought ?? null, sold: item.sold, ...(item.note ? { note: item.note } : {}),
+    bought: before.bought ?? earliestLot(lots), sold: item.sold, ...(item.note ? { note: item.note } : {}),
   };
   const left = Math.round((held - item.qty) * 1e8) / 1e8;
   let remaining = null;
   if (left <= 1e-9) list.splice(at, 1);
-  else { remaining = { ...before, [isOpt ? 'contracts' : 'qty']: left }; list[at] = remaining; }
+  else {
+    remaining = { ...before, [isOpt ? 'contracts' : 'qty']: left };
+    // Dated lots that no longer fit in what is left go first in, first out (the earliest dated lot first).
+    if (lots.length) { const kept = lotsAfterSale(lots, left); if (kept.length) remaining.lots = kept; else delete remaining.lots; }
+    list[at] = remaining;
+  }
   closed.push(sale);
   return done(item.id, before, { holding: remaining, closed: sale });
 }
