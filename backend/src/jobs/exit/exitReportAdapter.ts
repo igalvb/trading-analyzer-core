@@ -22,7 +22,7 @@ import type { ExitAnalysisBundle, ExitHoldingResult, ExitOptionResult, ExitPipel
 import { OPTION_CONTRACT_MULTIPLIER } from '../../portfolio/exitTax.ts';
 import { ASSUMED_ENTRY_BASIS } from '../../sheets/readers/portfolio.ts';
 import type { HoldingSellPlan } from './sellPlans.ts';
-import type { SellPlanView } from '../../reports/exitSheet/types.ts';
+import type { BusinessAlertsView, SellPlanView } from '../../reports/exitSheet/types.ts';
 
 export interface ExitAdapterOptions {
   /** Default: the pipeline's start time. */
@@ -35,6 +35,19 @@ export interface ExitAdapterOptions {
   readonly sellPlans?: ReadonlyMap<ExitHoldingResult, HoldingSellPlan>;
   /** F-X2: the Exit Target History tab could not be read or written. */
   readonly targetMemoryUnavailable?: boolean;
+  /** Owner 2026-11-07 (exit.businessAlerts shadow / on): the business alerts section. Absent = no section. */
+  readonly businessAlerts?: BusinessAlertsView | null;
+}
+
+const BIZ_FALLBACK = 'See the run log for this line.';
+/** The business alerts view with every sentence leak-scanned. */
+export function cleanBusinessAlerts(b: BusinessAlertsView): BusinessAlertsView {
+  return {
+    ...b,
+    intro: b.intro.map((t) => clean(t, '')).filter(Boolean),
+    market: { alert: b.market.alert, text: clean(b.market.text, BIZ_FALLBACK) },
+    holdings: b.holdings.map((h) => ({ ticker: h.ticker, alert: h.alert, text: clean(h.text, BIZ_FALLBACK) })),
+  };
 }
 
 const SELL_PLAN_FALLBACK = 'See the exit levels above for the targets.';
@@ -266,6 +279,7 @@ export function toExitReportInput(run: ExitPipelineResult, opts: ExitAdapterOpti
     sharedThesis: sharedThesisOf(run),
     advisory: opts.advisory ?? null,
     ...(opts.advisoryUnavailable ? { advisoryUnavailable: opts.advisoryUnavailable } : {}),
+    ...(opts.businessAlerts ? { businessAlerts: cleanBusinessAlerts(opts.businessAlerts) } : {}),
     dataHealth: [
       ...run.portfolioQuality,
       ...(opts.targetMemoryUnavailable ? [{ label: 'Saved exit targets', reasonCode: 'SHEET_UNREADABLE' as ReasonCode, effect: 'SECTION_LEFT_OUT' as const, now }] : []),

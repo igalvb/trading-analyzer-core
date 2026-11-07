@@ -129,8 +129,23 @@ export interface SkippedRows {
   readonly stockTableEmpty?: boolean;
 }
 
+/**
+ * Owner 2026-11-07 (profile `exit.businessAlerts` shadow / on): the business-based exit alerts (jobs/exit/businessAlerts.ts).
+ * Display only: no verdict, score or rule reads it. Plain sentences built from numbers and fixed words.
+ */
+export interface BusinessAlertsView {
+  readonly mode: 'shadow' | 'on';
+  readonly intro: readonly string[];
+  readonly market: { readonly alert: boolean; readonly text: string };
+  readonly holdings: ReadonlyArray<{ readonly ticker: string; readonly alert: boolean; readonly text: string }>;
+  /** Set when the section could not be built tonight (the other fields are then empty). */
+  readonly unavailable?: boolean;
+}
+
 export interface ExitReportInput {
   readonly runAt: Date;
+  /** Absent = the flag is off: no section. */
+  readonly businessAlerts?: BusinessAlertsView | null;
   readonly holdings: readonly ExitHoldingInput[];
   readonly skipped: SkippedRows;
   readonly sharedThesis?: SharedThesisInput | null;

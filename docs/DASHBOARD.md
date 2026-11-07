@@ -127,8 +127,14 @@ funds · Real estate · Cash) with a bar each, the group totals and the grand to
 is the day's USD/ILS of the newest snapshot). Stocks, crypto and calls are priced live from the Portfolio section
 (tonight's close, else the Exit report's, else the sheet's); a price you typed (`manualPrice`) wins. Names are shown
 exactly as you wrote them (Hebrew too, right-to-left). Pension, funds, real estate and cash show the date you last
-typed the value: **amber when older than 90 days**. Real estate counts net (value − mortgage). Also on the screen: a
-pie of the whole net worth by group and a pie of the market part by your own sub-types (tap a slice or a row: only
+typed the value: **amber when older than 90 days**. Real estate counts net (value − mortgage); each property row shows
+value · mortgage · net. **Debt is shown apart**: the top cards are **Net worth = Assets − Debts**, Assets (gross:
+markets + pension & funds + real estate's value + cash) and Debts (mortgages + other debts, negative); an item whose
+value is 0 and debt above 0 (a loan line, whatever its group) is a **Debt** line of its own in "Everything you own",
+not part of Cash. Display only: the net worth and the group totals of the snapshots are the same numbers
+(`netBalance` in `backend/src/ledger/networth.ts`; the page carries a copy, a test holds them equal). A debt line's
+amount is changed in `assets.json` for now (the edit screens change property mortgages only). Also on the screen: a
+pie of what you own by group (real estate net; debt lines left out) and a pie of the market part by your own sub-types (tap a slice or a row: only
 that one), the totals block in $ and ₪ (portfolio, pension, study and savings funds, real estate, debt, total savings
 with assets; per person when an asset has a `person`), and the ratio cards from `ledger/targets.json` (a name `A/B` is
 a price over a price, `A bag/B` your whole holding of A over B's price; the card shows today's ratio as a % of your
@@ -159,14 +165,20 @@ to your ledger: …") → **Save**. The page POSTs `{kind, file, item}` to `/api
 1. refuses anything but a same-site POST of JSON (8 KB at most) from an email in `ALLOWED_EMAILS` (Cloudflare
    Access's header), like the Run buttons;
 2. checks every field per kind (tickers, numbers and their bounds, dates, the group, text length; unknown fields
-   refused); only `holdings.json` (add / change / sell / remove), `assets.json` (add / change / remove), `flows.jsonl`
+   refused); only `holdings.json` (add / change / sell / remove / lot), `assets.json` (add / change / remove), `flows.jsonl`
    (add, confirm, dismiss: a new line with the same id) and `watchlist.json` can be edited;
 3. reads the head of `data`, applies the change, and writes the file AND a line in `ledger/edits.jsonl` in ONE commit
    ("ledger: <kind> <id> by dashboard"; git data API: blobs, tree, commit, then the branch moves only if no one else
    moved it; if a run committed in between, it starts again once from the new head).
 
 The page then says "Saved ✓ — the dashboard updates after the next run" and shows the change at once. A sale moves the
-sold part to the CLOSED positions with its cost and proceeds. Settings needed: `GITHUB_TOKEN` with **Contents: Read
+sold part to the CLOSED positions with its cost and proceeds. **Lots** (additive 2026-11-07): a stock, bitcoin fund or coin's detail
+shows its dated purchase lots (date, quantity, price, gain per lot, days held) and the undated rest (priced so the
+total cost stays quantity x average cost); **Add a lot** / ✕ send `kind: 'lot'` with `{op: 'add', id, date, qty,
+price, note?}` (the lots may not hold more than the quantity) or `{op: 'remove', id, index, date, qty, price}` (the
+lot's place AND its numbers, so a stale page is refused). A change keeps the lots (and refuses a quantity below them);
+a sale shrinks the lots that no longer fit, earliest first. A rest whose implied price is negative or absurd shows no
+price and a "To check" line (docs/LEDGER.md "Dated purchase lots"). Settings needed: `GITHUB_TOKEN` with **Contents: Read
 and write** (step C), `REPO`, `ALLOWED_EMAILS`; optional `TIME_ZONE` (the day written in `updated`, default New York).
 
 ## What was not verified here, and the fallback

@@ -292,3 +292,84 @@ jobs:
           git commit -q -m "Ledger: nightly snapshot $(date '+%Y-%m-%d')" || { echo "Nothing new."; exit 0; }
           git push -q origin HEAD:data
           echo "Committed to branch data."
+
+  # docs/LONG_HISTORY_PLAN.md: keeps the 20-year price history current after each Nightly (owner 2026-11-07), instead
+  # of manual Long History runs. Write access only here and only to the separate `prices` branch (never main). The
+  # owner's runs only (the default set reads the built-in profile). Append = only the bars after each file's last one,
+  # for the default set plus every ticker already on the branch (the extra tickers typed in long-history.yml). A
+  # failure here never fails the Nightly (continue-on-error on the job); it shows as a warning on the run page.
+  long-history:
+    name: Append the new bars to the long price history (prices branch)
+    needs: nightly
+    if: ${{ !cancelled() && (inputs.user || 'owner') == 'owner' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Check out the prices branch (a missing branch is skipped; the first fill is the manual backfill)
+        id: prices
+        uses: actions/checkout@v5
+        continue-on-error: true
+        with:
+          ref: prices
+          path: prices-branch
+
+      - name: No prices branch yet
+        if: ${{ steps.prices.outcome != 'success' }}
+        run: echo "::notice::No prices branch yet; run Actions > Long History > backfill once. Nothing appended."
+
+      - name: Set up Node.js
+        if: ${{ steps.prices.outcome == 'success' }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        if: ${{ steps.prices.outcome == 'success' }}
+        working-directory: backend
+        run: npm ci
+
+      - name: Append the new bars
+        if: ${{ steps.prices.outcome == 'success' }}
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          dir="$GITHUB_WORKSPACE/prices-branch/prices"
+          mkdir -p "$dir"
+          marker="$RUNNER_TEMP/long-history-start"
+          touch "$marker"
+          npm run long-history -- append "$dir"
+          # The tickers already on the branch that the default set did not touch (typed in long-history.yml).
+          extra=()
+          while IFS= read -r f; do
+            t="${f%.csv}"; t="${t/#_/^}"
+            if [[ "$t" =~ ^[A-Za-z0-9.^=-]{1,12}$ ]]; then extra+=("$t"); fi
+          done < <(find "$dir" -maxdepth 1 -name '*.csv' ! -newer "$marker" -printf '%f\n' | sort)
+          if [ "${#extra[@]}" -gt 0 ]; then npm run long-history -- append "$dir" "${extra[@]}"; fi
+          npm run long-history -- check "$dir" | tail -n 1
+
+      - name: Commit to the prices branch (only when a price file changed)
+        if: ${{ steps.prices.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          cd prices-branch
+          if [ -z "$(git status --porcelain -- 'prices/*.csv')" ]; then echo "No new bars; nothing committed."; exit 0; fi
+          git config user.name "long-history"
+          git config user.email "long-history@users.noreply.github.com"
+          git add prices
+          git commit -q -m "Long price history: nightly append $(date '+%Y-%m-%d')"
+          git push -q origin HEAD:prices
+          echo "Committed to branch prices."
+
+      - name: Failure notice (the Nightly itself is not failed)
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::The long price history append failed; the prices branch was not updated. The Nightly result is unaffected. Re-run Actions > Long History > append by hand if needed."
+          echo "### Long price history append FAILED (the Nightly is unaffected)" >> "$GITHUB_STEP_SUMMARY"

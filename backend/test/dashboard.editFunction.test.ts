@@ -6,7 +6,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { handleEdit, validateEdit, applyEdit, LEDGER, RULES, SAVED, onRequest } from '../dashboard/functions/api/edit.js';
-import { LEDGER_SCHEMA, LEDGER_BRANCH, LEDGER_FILES, LEDGER_GROUPS } from '../src/ledger/schema.ts';
+import { LEDGER_SCHEMA, LEDGER_BRANCH, LEDGER_FILES, LEDGER_GROUPS, LEDGER_EDIT_KINDS } from '../src/ledger/schema.ts';
 
 const SITE = 'https://trading-dashboard.pages.dev';
 const ME = 'me@example.com';
@@ -101,6 +101,8 @@ describe('dashboard /api/edit', () => {
     assert.equal(LEDGER.branch, LEDGER_BRANCH);
     assert.deepEqual(LEDGER.files, LEDGER_FILES);
     assert.deepEqual(LEDGER.groups, [...LEDGER_GROUPS]);
+    assert.deepEqual(LEDGER.editKinds, [...LEDGER_EDIT_KINDS]);
+    assert.ok((Object.values(RULES).flat() as string[]).every((k) => (LEDGER_EDIT_KINDS as readonly string[]).includes(k)), 'every allowed kind is a LedgerEdit kind');
     assert.deepEqual(Object.keys(RULES).sort(), [LEDGER_FILES.assets, LEDGER_FILES.flows, LEDGER_FILES.holdings, LEDGER_FILES.watchlist].sort());
   });
 
@@ -199,6 +201,55 @@ describe('dashboard /api/edit', () => {
     assert.equal(JSON.parse(gh2.files()[LEDGER_FILES.flows]!.trim().split('\n')[1]!).dismissed, true);
   });
 
+  test('lots: add and remove a dated lot (strict), one commit with an edit line each; options refused', async () => {
+    const gh = fakeGitHub(base());
+    const lot = (o: Record<string, unknown>) => ({ kind: 'lot', file: LEDGER_FILES.holdings, item: { op: 'add', id: 's1', date: '2025-01-10', qty: 4, price: 90, ...o } });
+    const r = await edit(gh, lot({ note: 'pre-split 1 @ 900' }));
+    assert.equal(r.status, 200, r.body.message);
+    assert.equal(gh.message(), 'ledger: lot s1 by dashboard');
+    let s1 = JSON.parse(gh.files()[LEDGER_FILES.holdings]!).stocks[0];
+    assert.deepEqual(s1.lots, [{ date: '2025-01-10', qty: 4, price: 90, note: 'pre-split 1 @ 900' }]);
+    assert.equal(s1.qty, 10, 'qty and avgCost untouched');
+    assert.equal(s1.avgCost, 100);
+    assert.equal((await edit(gh, lot({ date: null, qty: 6, price: 106.67 }))).status, 200, 'an undated lot');
+    assert.equal((await edit(gh, lot({ qty: 0.5 }))).status, 400, 'the lots would hold more than qty');
+    assert.equal((await edit(gh, lot({ id: 'o1' }))).status, 400, 'not on an option');
+    assert.equal((await edit(gh, lot({ id: 'zz' }))).status, 404);
+    const e = editsOf(gh);
+    assert.equal(e.length, 2);
+    assert.equal(e[0]!.kind, 'lot');
+    assert.equal((e[0]!.before as { lots?: unknown }).lots, undefined);
+    assert.deepEqual((e[1]!.after as { lots: unknown[] }).lots.length, 2);
+    // remove: by its place AND its numbers (a stale page is refused)
+    const del = (o: Record<string, unknown>) => ({ kind: 'lot', file: LEDGER_FILES.holdings, item: { op: 'remove', id: 's1', index: 0, date: '2025-01-10', qty: 4, price: 90, ...o } });
+    assert.equal((await edit(gh, del({ price: 91 }))).status, 409);
+    assert.equal((await edit(gh, del({ index: 5 }))).status, 409);
+    assert.equal((await edit(gh, del({}))).status, 200);
+    s1 = JSON.parse(gh.files()[LEDGER_FILES.holdings]!).stocks[0];
+    assert.deepEqual(s1.lots, [{ date: null, qty: 6, price: 106.67 }]);
+    assert.equal((await edit(gh, del({ index: 0, date: null, qty: 6, price: 106.67 }))).status, 200);
+    assert.ok(!('lots' in JSON.parse(gh.files()[LEDGER_FILES.holdings]!).stocks[0]), 'the last lot removed drops the field');
+  });
+
+  test('lots survive a change (and must still fit), and shrink first in, first out on a sale', async () => {
+    const withLots = JSON.parse(HOLDINGS);
+    withLots.stocks[0].lots = [{ date: '2025-03-01', qty: 3, price: 110 }, { date: '2025-01-10', qty: 4, price: 90 }];
+    const gh = fakeGitHub({ ...base(), [LEDGER_FILES.holdings]: JSON.stringify(withLots, null, 2) + '\n' });
+    const change = (qty: number) => ({ kind: 'change', file: LEDGER_FILES.holdings, item: { type: 'stock', id: 's1', ticker: 'AAA', kind: 'stock', qty, avgCost: 100, currency: 'USD', bought: null } });
+    assert.equal((await edit(gh, change(6))).status, 400, 'below the lots');
+    assert.equal((await edit(gh, change(12))).status, 200);
+    let s1 = JSON.parse(gh.files()[LEDGER_FILES.holdings]!).stocks[0];
+    assert.equal(s1.lots.length, 2, 'lots kept on a change');
+    // sell 7 of 12: 5 left; the lots hold 7 -> the earliest (2025-01-10, 4) shrinks by 2
+    const r = await edit(gh, { kind: 'sell', file: LEDGER_FILES.holdings, item: { id: 's1', qty: 7, price: 150, sold: '2026-11-05' } });
+    assert.equal(r.status, 200, r.body.message);
+    const h = JSON.parse(gh.files()[LEDGER_FILES.holdings]!);
+    s1 = h.stocks[0];
+    assert.equal(s1.qty, 5);
+    assert.deepEqual(s1.lots, [{ date: '2025-03-01', qty: 3, price: 110 }, { date: '2025-01-10', qty: 2, price: 90 }]);
+    assert.equal(h.closed[0].bought, '2025-01-10', 'no bought: the earliest lot');
+  });
+
   test('watchlist: replaced as a whole; a missing file starts from an empty one', async () => {
     const gh = fakeGitHub(base());
     const r = await edit(gh, { kind: 'watchlist', file: LEDGER_FILES.watchlist, item: { tickers: ['AAA', 'BRK.B'] } });
@@ -213,6 +264,21 @@ describe('dashboard /api/edit', () => {
     const stock = { type: 'stock', ticker: 'AAA', kind: 'stock', qty: 1, avgCost: 1, currency: 'USD', bought: null };
     ok({ kind: 'add', file: LEDGER_FILES.holdings, item: stock });
     ok({ kind: 'add', file: LEDGER_FILES.holdings, item: { ...stock, subType: 'Stocks long' } });
+    const lotAdd = { op: 'add', id: 's1', date: '2025-01-10', qty: 1, price: 1 };
+    ok({ kind: 'lot', file: LEDGER_FILES.holdings, item: lotAdd });
+    ok({ kind: 'lot', file: LEDGER_FILES.holdings, item: { ...lotAdd, date: null } });
+    bad({ kind: 'lot', file: LEDGER_FILES.assets, item: lotAdd });
+    bad({ kind: 'lot', file: LEDGER_FILES.holdings, item: { ...lotAdd, op: 'move' } });
+    bad({ kind: 'lot', file: LEDGER_FILES.holdings, item: { ...lotAdd, qty: 0 } });
+    bad({ kind: 'lot', file: LEDGER_FILES.holdings, item: { ...lotAdd, price: -1 } });
+    bad({ kind: 'lot', file: LEDGER_FILES.holdings, item: { ...lotAdd, date: '2099-01-01' } });
+    bad({ kind: 'lot', file: LEDGER_FILES.holdings, item: { ...lotAdd, date: '2025-02-30' } });
+    bad({ kind: 'lot', file: LEDGER_FILES.holdings, item: { ...lotAdd, extra: 1 } });
+    bad({ kind: 'lot', file: LEDGER_FILES.holdings, item: { op: 'add', id: 's1', qty: 1, price: 1 } });
+    ok({ kind: 'lot', file: LEDGER_FILES.holdings, item: { op: 'remove', id: 's1', index: 0, date: null, qty: 1, price: 1 } });
+    bad({ kind: 'lot', file: LEDGER_FILES.holdings, item: { op: 'remove', id: 's1', index: 0.5, date: null, qty: 1, price: 1 } });
+    bad({ kind: 'lot', file: LEDGER_FILES.holdings, item: { op: 'remove', id: 's1', date: null, qty: 1, price: 1 } });
+    bad({ kind: 'add', file: LEDGER_FILES.holdings, item: { ...stock, lots: [] } });
     ok({ kind: 'add', file: LEDGER_FILES.assets, item: { group: 'cash', name: 'x', value: 1, currency: 'ILS', asOf: TODAY, person: 'P1' } });
     bad({ kind: 'add', file: LEDGER_FILES.assets, item: { group: 'cash', name: 'x', value: 1, currency: 'ILS', asOf: TODAY, person: 'x'.repeat(41) } });
     ok({ kind: 'add', file: LEDGER_FILES.holdings, item: { ...stock, kind: 'crypto', ticker: 'BTC', manualPrice: 70000 } });

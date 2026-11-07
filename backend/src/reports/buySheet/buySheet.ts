@@ -543,6 +543,10 @@ export function buildBuySheet(ss: ReportWorkbook, input: BuyReportInput, deps: B
   const sections: Row[][] = [];
   sections.push(safe('Banner', T.title, null, () => bannerRows(input, sorted, ctx)));
   if (input.marketOptionsLine) sections.push([line(ctx.clean(input.marketOptionsLine, '—', 'market options line'), { italic: true, color: '#4a148c' })]);
+  if (input.washoutLines && input.washoutLines.length) sections.push(input.washoutLines.map((w) => line(ctx.clean(w, '—', 'washout line'), { bold: true, color: '#1b5e20' })));
+  if (input.eventCheck && input.eventCheck.lines.length) {
+    sections.push([band(ctx.clean(input.eventCheck.heading, '—', 'event check heading'), '#e65100', 12), ...input.eventCheck.lines.map((w) => line(ctx.clean(w, '—', 'event check line'), { color: '#bf360c' }))]);
+  }
   sections.push(safe('Shortlist', T.shortlistHeader, null, () => shortlistRows(sorted, input, ctx)));
   sections.push(safe('Full ranking', T.rankingHeader, null, () => rankingRows(sorted, ctx)));
   sections.push(safe('Changed since last run', T.changedHeader, null, () => changedRows(sorted, ctx)));

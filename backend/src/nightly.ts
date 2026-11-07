@@ -42,6 +42,9 @@ import { fetchYahooChartRaw } from './fetch/yahoo.ts';
 import { dataBranchDir } from './ledger/store.ts';
 import { runLedgerNight, type LedgerNightDeps } from './ledger/night.ts';
 import { fetchCryptoPrices } from './ledger/cryptoPrices.ts';
+import { sendWashoutAlerts } from './jobs/washout/washoutAlert.ts';
+import { notifyIfNeeded, type TelegramTarget } from './notify/policy.ts';
+import type { PropertyStore } from './storage/kv.ts';
 
 export async function nightlyMain(argv: readonly string[], io: CliIo = STD_IO, over: { readonly transport?: HttpTransport; readonly clock?: { now(): number }; readonly initialTabs?: Record<string, unknown[][]> } = {}): Promise<number> {
   const flags = new Set(argv);
@@ -67,6 +70,9 @@ export async function nightlyMain(argv: readonly string[], io: CliIo = STD_IO, o
         await maybeSendPaperWeekly({ store: s.tabStore, kv: s.kv, telegram: { deps: { token }, chatId }, toPdf: pdfMaker(env), log: textLog(s.ctx.log), now: s.clock.now(), timeZone: s.timeZone })
           .catch((e: unknown) => s.ctx.log.warning('paper weekly failed (the nightly result is unchanged)', { detail: String(e) }));
       }
+      // The Washout ADD alert (profile alerts.washout): one Telegram line per new washout; silent otherwise. Inside the
+      // Master Lock so the dedupe days in the property store are flushed with the run's.
+      if (s.sheets && token && chatId) await runWashoutAlerts(app, s.kv, { deps: { token }, chatId }, textLog(s.ctx.log));
       await s.flushStores();
       return result;
     });
@@ -118,6 +124,13 @@ export function ledgerNightDeps(s: Services, app: Pick<NightlyApp, 'portfolio'>)
     }),
     info: (m) => s.ctx.log.info(m), warn: (m) => s.ctx.log.warning(m),
   };
+}
+
+/** Tonight's washout lines (null = off): one Telegram line each, deduped per stock (jobs/washout/washoutAlert.ts). Never throws. */
+export async function runWashoutAlerts(app: Pick<NightlyApp, 'washout'>, kv: PropertyStore, tg: TelegramTarget, log: (m: string) => void): Promise<string[]> {
+  const night = await app.washout().catch(() => null);
+  if (!night) return [];
+  return sendWashoutAlerts({ kv, send: (line) => notifyIfNeeded(tg, line, log), log }, night).catch((e: unknown) => { log('washout alert: not sent: ' + String(e)); return []; });
 }
 
 /** HTML to PDF with the runner's Chrome; null when there is none. */

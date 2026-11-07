@@ -325,7 +325,7 @@ tr.tot td { font-weight: 600; background: color-mix(in srgb, var(--muted) 7%, tr
 .menu-list button:first-child { border-top: 0; }
 .tagchips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
 .tagchips button { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 10px; font: 13px var(--font-mono); }
-@media (min-width: 960px) { .chart-box.tall { height: 340px; } #nwKpis { grid-template-columns: repeat(7, minmax(0, 1fr)); } #nwKpis .kpi.hero { grid-column: span 2; } }
+@media (min-width: 960px) { .chart-box.tall { height: 340px; } #nwKpis { grid-template-columns: repeat(6, minmax(0, 1fr)); } #nwKpis .kpi.hero, #nwKpis .kpi.big, #nwKpis .kpi.last { grid-column: span 2 !important; } #nwKpis .kpi.big .val { font-size: 24px; } }
 .pie-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-items: center; }
 .pie-row .chart-box { height: 170px; }
 @media (min-width: 600px) { .pie-row { grid-template-columns: 170px minmax(0, 1fr); gap: 14px; } }
@@ -376,7 +376,7 @@ tr.tot td { font-weight: 600; background: color-mix(in srgb, var(--muted) 7%, tr
       </div>
       <div class="grid halves" style="margin-top:12px">
         <div class="card">
-          <div class="card-head"><h3>Net worth by group</h3><span class="muted small">tap a slice: only that group</span></div>
+          <div class="card-head"><h3>Net worth by group</h3><span class="muted small">what you own (real estate net); tap a slice: only that group</span></div>
           <div class="pie-row"><div class="chart-box"><canvas id="ch-nwpie" role="img" aria-label="Donut chart: net worth by group (the list beside it has every value)"></canvas></div><ul class="leg" id="nwPieLeg"></ul></div>
         </div>
         <div class="card">
@@ -911,7 +911,7 @@ function renderBuy() {
   const verdicts = [...new Set(B.items.map(x => x.verdictKey))];
   $('#buyFilters').innerHTML = fchips('buy', 'verdict', ['All', ...verdicts]) + fsel('buy', 'zone', 'Entry zone', [['All', 'Any zone'], ['in', 'In zone'], ['above', 'Above zone'], ['below', 'Below zone']]);
   const items = B.items.filter(x => (F.buy.verdict === 'All' || x.verdictKey === F.buy.verdict) && (F.buy.zone === 'All' || x.zoneState === F.buy.zone));
-  $('#buyList').innerHTML = items.length ? items.map(w => `<article class="card"><div class="hcard-top" style="gap:12px">${ring(w.conviction)}<div style="flex:1;min-width:0"><div class="ticker">${esc(w.ticker)} <span class="muted small">#${esc(w.rank)}</span></div><div class="num muted small">${fmtP(w.price)}</div></div>${chip(w.verdictKey, w.verdictKey)}</div>
+  $('#buyList').innerHTML = items.length ? items.map(w => `<article class="card"><div class="hcard-top" style="gap:12px">${ring(w.conviction)}<div style="flex:1;min-width:0"><div class="ticker">${esc(w.ticker)} <span class="muted small">#${esc(w.rank)}</span>${w.washout ? ` <span class="chip good" title="${esc(w.washout)}">🟢 Washout</span>` : ''}</div><div class="num muted small">${fmtP(w.price)}</div></div>${chip(w.verdictKey, w.verdictKey)}</div>
     <p class="small" style="margin:8px 0">${esc(w.verdict)}</p>
     <div class="facts"><div><div class="k">Entry zone</div><div class="num">${esc(w.zoneText || '—')}</div></div><div><div class="k">Distance to zone</div><div class="num">${w.zoneState === 'in' ? 'in zone' : pct(w.distancePct)}</div></div><div><div class="k">Fundamentals</div><div class="small">${esc(w.fundamentals || '—')}</div></div><div><div class="k">Timing</div><div class="small">${esc(w.timing || '—')}</div></div></div>
     <div class="btn-row"><button class="btn primary" type="button" data-run="analyze" data-ticker="${esc(w.ticker)}">Analyze now — Free</button><button class="btn" type="button" data-analyze="${esc(w.ticker)}">Details</button></div></article>`).join('') : empty('No candidate matches these filters.');
@@ -1157,6 +1157,78 @@ function conv(amount, currency, fx) {
 }
 /* An item's value in the chosen currency (its own currency when there is no rate). */
 function itemShown(x) { const c = cur(), v = c === 'ILS' ? x.ils : x.usd; return isNum(v) ? [v, c] : [x.net, x.currency]; }
+/* balance-math:start (a copy of isDebtItem + netBalance in src/ledger/networth.ts; test/dashboard.networth.test.ts holds them equal) */
+function isDebtItem(x) { return x.value === 0 && typeof x.debt === 'number' && Number.isFinite(x.debt) && x.debt > 0; }
+function netBalance(items, rate) {
+  const fin = v => typeof v === 'number' && Number.isFinite(v), rr = v => Math.round(v * 100) / 100, ok = fin(rate) && rate > 0;
+  const toUsd = (amount, currency) => (currency === 'USD' ? rr(amount) : ok ? rr(amount / rate) : null);
+  let assets = 0, mortgages = 0, other = 0;
+  for (const x of items) {
+    if (x.usd == null) continue;
+    const hasDebt = fin(x.debt) && x.debt !== 0;
+    const gross = hasDebt ? (toUsd(x.value == null ? 0 : x.value, x.currency) ?? 0) : x.usd;
+    const debt = hasDebt ? gross - x.usd : 0;
+    if (gross >= 0) assets += gross; else other += gross;
+    if (x.group === 'realEstate') mortgages -= debt; else other -= debt;
+  }
+  const a = rr(assets), m = rr(mortgages), o = rr(other), d = rr(m + o), n = rr(assets + mortgages + other);
+  return { assetsUsd: a, mortgagesUsd: m, otherDebtsUsd: o, debtsUsd: d, netUsd: n, ils: ok ? { assets: rr(a * rate), mortgages: rr(m * rate), otherDebts: rr(o * rate), debts: rr(d * rate), net: rr(n * rate) } : null };
+}
+/* balance-math:end */
+/* lots-math:start (a copy of lotsOf + boughtOf in src/ledger/lots.ts; test/ledger.lots.test.ts holds them equal) */
+const LOT_IMPLIED_MAX_RATIO = 10, LOT_COST_TOLERANCE = 0.005, LOT_EPS = 1e-9;
+function lotsOf(s, priceNow, today) {
+  const fin = x => typeof x === 'number' && Number.isFinite(x);
+  const r2 = x => Math.round(x * 100) / 100;
+  const r4 = x => Math.round(x * 10000) / 10000;
+  const dayMs = d => Date.parse(d + 'T12:00:00Z');
+  const lots = (Array.isArray(s.lots) ? s.lots : []).map((l, index) => Object.assign({}, l, { index })).filter(l => fin(l.qty) && l.qty > 0 && fin(l.price) && l.price >= 0);
+  if (!lots.length) return { rows: [], problem: null };
+  const now = fin(priceNow) && priceNow > 0 ? priceNow : null;
+  const row = (date, qty, price, note, index) => {
+    const cost = price != null ? r2(qty * price) : null, value = now != null ? r2(qty * now) : null;
+    const gain = cost != null && value != null ? r2(value - cost) : null;
+    const held = date && Number.isFinite(dayMs(date)) && Number.isFinite(dayMs(today)) ? Math.max(0, Math.round((dayMs(today) - dayMs(date)) / 86400000)) : null;
+    return { date, qty, price, note, implied: index == null, index, cost, value, gain, gainPct: gain != null && cost ? r2((gain / cost) * 100) : null, heldDays: held };
+  };
+  const sorted = lots.slice().sort((a, b) => (a.date == null ? 1 : b.date == null ? -1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const rows = sorted.map(l => row(l.date == null ? null : l.date, l.qty, l.price, typeof l.note === 'string' && l.note ? l.note : null, l.index));
+  const held = lots.reduce((a, l) => a + l.qty, 0), paid = lots.reduce((a, l) => a + l.qty * l.price, 0);
+  const qty = fin(s.qty) ? s.qty : 0, avg = fin(s.avgCost) ? s.avgCost : null;
+  const rest = Math.round((qty - held) * 1e8) / 1e8;
+  let problem = null;
+  if (rest < -LOT_EPS) problem = 'The dated lots hold ' + r4(held) + ', more than the ' + r4(qty) + ' you hold: remove or fix a lot.';
+  else if (rest > LOT_EPS) {
+    if (avg == null) { problem = 'No average cost: the ' + r4(rest) + ' not in a dated lot have no price.'; rows.push(row(null, rest, null, null, null)); }
+    else {
+      const implied = (qty * avg - paid) / rest;
+      const bad = implied < -LOT_EPS || (avg > 0 && implied > avg * LOT_IMPLIED_MAX_RATIO);
+      if (bad) problem = 'The ' + r4(rest) + ' not in a dated lot would have cost ' + r4(implied) + ' each to keep the average cost ' + r4(avg) + ': check the lots or the average cost.';
+      rows.push(row(null, rest, bad ? null : r4(Math.max(0, implied)), null, null));
+    }
+  } else if (avg != null && qty > 0 && Math.abs(paid - qty * avg) > Math.abs(qty * avg) * LOT_COST_TOLERANCE) {
+    problem = 'The dated lots cost ' + r2(paid) + ', not ' + r2(qty * avg) + ' (quantity x average cost): check the lots or the average cost.';
+  }
+  return { rows, problem };
+}
+function boughtOf(s) {
+  if (typeof s.bought === 'string' && s.bought) return s.bought;
+  const days = (Array.isArray(s.lots) ? s.lots : []).map(l => l && l.date).filter(d => typeof d === 'string' && d !== '').sort();
+  return days[0] == null ? null : days[0];
+}
+/* lots-math:end */
+/* The list's lines: each group without its debt items (cash shows its positive part), then one "Debt" line with every debt item. */
+function nwLines(N) {
+  const fx = fxNow(), L = [];
+  NG.forEach(id => {
+    const xs = N.items.map((x, i) => [x, i]).filter(([x]) => x.group === id && !isDebtItem(x)); if (!xs.length) return;
+    const g = N.groups.find(y => y.id === id) || {}, pr = xs.filter(([x]) => isNum(x.usd)), usd = r2(pr.reduce((s, [x]) => s + x.usd, 0)) || 0;
+    L.push({ id, label: NG_LABEL[id], count: xs.length, usd, ils: fx ? r2(usd * fx) : null, grossUsd: g.grossUsd, debtUsd: g.debtUsd, stale: xs.filter(([x]) => x.stale).length, items: xs });
+  });
+  const ds = N.items.map((x, i) => [x, i]).filter(([x]) => isDebtItem(x));
+  if (ds.length) { const usd = r2(ds.filter(([x]) => isNum(x.usd)).reduce((s, [x]) => s + x.usd, 0)) || 0; L.push({ id: 'debt', label: 'Debt', count: ds.length, usd, ils: fx ? r2(usd * fx) : null, grossUsd: null, debtUsd: null, stale: ds.filter(([x]) => x.stale).length, items: ds, debt: true }); }
+  return L;
+}
 /* Same arithmetic as src/ledger/networth.ts buildNetWorth, so an edit shows at once (optimistic) with the right totals. */
 function nwRecalc() {
   const N = NW(); if (!N) return;
@@ -1175,6 +1247,7 @@ function nwRecalc() {
   const gU = ids => r2(N.groups.filter(g => ids.includes(g.id)).reduce((s, g) => s + g.usd, 0)) || 0, re = N.groups.find(g => g.id === 'realEstate');
   const T = { portfolio: gU(MARKET), pension: gU(['pension']), funds: gU(['funds']), realEstate: r2(re ? re.grossUsd || 0 : 0), debt: r2(re ? -(re.debtUsd || 0) : 0), total: usd };
   N.totals = Object.assign({}, T, { ils: fx ? Object.fromEntries(Object.entries(T).map(([k, v]) => [k, r2(v * fx)])) : null });
+  N.balance = netBalance(N.items, fx);
   const pp = {};
   N.items.forEach(x => { if (x.person && isNum(x.usd)) { const p = pp[x.person] || (pp[x.person] = { name: x.person, count: 0, usd: 0 }); p.count++; p.usd += x.usd; } });
   N.persons = Object.values(pp).map(p => ({ name: p.name, count: p.count, usd: r2(p.usd), ils: fx ? r2(p.usd * fx) : null })).sort((a, b) => b.usd - a.usd);
@@ -1186,10 +1259,12 @@ function renderTotals() {
   const N = NW(), T = N && N.totals; if (!T) { $('#nwTotals').innerHTML = ''; return; }
   const I = T.ils, fx = fxNow();
   const rows = [['Portfolio (stocks, crypto, calls)', 'portfolio'], ['Pension', 'pension'], ['Study and savings funds', 'funds'], ['Real estate (value)', 'realEstate'], ['Debt (mortgages)', 'debt']];
-  const cash = N.groups.find(g => g.id === 'cash');
+  const B = N.balance || netBalance(N.items, fx), cashL = nwLines(N).find(g => g.id === 'cash');
+  const cash = cashL ? { usd: cashL.usd, ils: cashL.ils } : null, od = B.otherDebtsUsd ? { usd: B.otherDebtsUsd, ils: B.ils ? B.ils.otherDebts : null } : null;
   $('#totFx').textContent = fx ? 'USD/ILS ' + fx.toFixed(3) : 'no USD/ILS rate yet';
   $('#nwTotals').innerHTML = `<table class="tot-table"><thead><tr><th></th><th class="n">$</th><th class="n">₪</th></tr></thead><tbody>${rows.map(([l, k]) => `<tr><td>${esc(l)}</td><td class="n ${T[k] < 0 ? 'down' : ''}">${fmtC(T[k], 'USD')}</td><td class="n ${T[k] < 0 ? 'down' : ''}">${I ? fmtC(I[k], 'ILS') : '—'}</td></tr>`).join('')}
     ${cash ? `<tr><td>Cash</td><td class="n">${fmtC(cash.usd, 'USD')}</td><td class="n">${fmtC(cash.ils, 'ILS')}</td></tr>` : ''}
+    ${od ? `<tr><td>Other debts</td><td class="n down">${fmtC(od.usd, 'USD')}</td><td class="n down">${fmtC(od.ils, 'ILS')}</td></tr>` : ''}
     <tr class="big"><td>Total savings with assets</td><td class="n">${fmtC(T.total, 'USD')}</td><td class="n">${I ? fmtC(I.total, 'ILS') : '—'}</td></tr>
     ${N.persons && N.persons.length ? `<tr class="group-row"><td colspan="3">By person (pension, funds, property)</td></tr>` + N.persons.map(p => `<tr><td><span dir="auto">${esc(p.name)}</span> <span class="muted small">(${p.count})</span></td><td class="n">${fmtC(p.usd, 'USD')}</td><td class="n">${fmtC(p.ils, 'ILS')}</td></tr>`).join('') : ''}</tbody></table>`;
 }
@@ -1204,8 +1279,8 @@ function renderRatios() {
 }
 function renderPieLegends() {
   const N = NW(); if (!N) { $('#nwPieLeg').innerHTML = ''; $('#stPieLeg').innerHTML = ''; $('#stItems').innerHTML = ''; return; }
-  const c = cur(), pos = N.groups.reduce((s, g) => s + Math.max(0, g.usd), 0) || 1;
-  $('#nwPieLeg').innerHTML = N.groups.map(g => `<li><button type="button" data-nwpie="${g.id}" aria-pressed="${nwFilter === g.id}"><i class="sw" style="background:var(--${NG_COLOR[g.id]})"></i><span class="clip">${esc(g.label)}</span><span class="num">${fmtC(c === 'ILS' ? g.ils : g.usd, c)}</span><span class="num muted">${(Math.max(0, g.usd) / pos * 100).toFixed(1)}%</span></button></li>`).join('');
+  const c = cur(), PG = nwLines(N).filter(g => !g.debt), pos = PG.reduce((s, g) => s + Math.max(0, g.usd), 0) || 1;
+  $('#nwPieLeg').innerHTML = PG.map(g => `<li><button type="button" data-nwpie="${g.id}" aria-pressed="${nwFilter === g.id}"><i class="sw" style="background:var(--${NG_COLOR[g.id]})"></i><span class="clip">${esc(g.label)}</span><span class="num">${fmtC(c === 'ILS' ? g.ils : g.usd, c)}</span><span class="num muted">${(Math.max(0, g.usd) / pos * 100).toFixed(1)}%</span></button></li>`).join('');
   const ST = N.subTypes || [], col = stColors(ST);
   $('#stSub').textContent = ST.length ? fmtC(inCur(ST.reduce((s, t) => s + t.usd, 0)), c) : '';
   $('#stPieLeg').innerHTML = ST.length ? ST.map(t => `<li><button type="button" data-stpie="${esc(t.name)}" aria-pressed="${stFilter === t.name}"><i class="sw" style="background:var(--${col[t.name]})"></i><span class="clip" dir="auto">${esc(t.name)}</span><span class="num">${fmtC(inCur(t.usd), c)}</span><span class="num muted">${isNum(t.share) ? t.share.toFixed(1) : '—'}%</span></button></li>`).join('') : `<li class="muted small">No stocks, crypto or calls yet.</li>`;
@@ -1217,7 +1292,7 @@ function nwPies() {
   const c = cur(), pieOpts = (labels, vals, onPick) => ({ responsive: true, maintainAspectRatio: false, cutout: '62%', animation: reduceMotion ? false : { duration: 300 },
     plugins: { legend: { display: false }, tooltip: { callbacks: { label: t => ' ' + labels[t.dataIndex] + ': ' + fmtC(vals[t.dataIndex], c) } } },
     onClick: (evt, els) => { if (els && els[0]) onPick(els[0].index); } });
-  const G = N.groups.filter(g => g.usd > 0), gv = G.map(g => (c === 'ILS' ? g.ils : g.usd));
+  const G = nwLines(N).filter(g => !g.debt && g.usd > 0), gv = G.map(g => (c === 'ILS' ? g.ils : g.usd));
   mkChart('nwpie', $('#ch-nwpie'), { type: 'doughnut', data: { labels: G.map(g => g.label), datasets: [{ data: gv, backgroundColor: G.map(g => alpha(tok(NG_COLOR[g.id]), !nwFilter || nwFilter === g.id ? 1 : 0.25)), borderColor: tok('surface'), borderWidth: 2, borderRadius: 4, hoverOffset: 4 }] },
     options: pieOpts(G.map(g => g.label), gv, i => { const id = G[i].id; nwFilter = nwFilter === id ? null : id; if (nwFilter) nwOpen.add(nwFilter); renderNetworth(); nwPies(); }) });
   const ST = (N.subTypes || []).filter(t => t.usd > 0), col = stColors(N.subTypes || []), sv = ST.map(t => inCur(t.usd));
@@ -1225,10 +1300,15 @@ function nwPies() {
     options: pieOpts(ST.map(t => t.name), sv, i => { const n = ST[i].name; stFilter = stFilter === n ? null : n; renderPieLegends(); nwPies(); }) });
 }
 function sourceTxt(x) { return x.source === 'live' ? 'live price' : x.source === 'report' ? 'Exit report price' : x.source === 'sheet' ? 'sheet price' : x.source === 'manual' ? 'your price' : x.source === 'nightly' ? 'the Nightly\'s price' : x.source === 'estimate' ? 'estimate until the next run' : 'no price yet'; }
+/* A real estate item's value and mortgage in the chosen currency (its own when there is no rate). */
+function reParts(x) { const c = cur(), fx = fxNow(), k = c === 'ILS' ? 1 : 0, val = conv(x.value, x.currency, fx)[k], dbt = conv(x.debt, x.currency, fx)[k]; return isNum(val) && isNum(dbt) ? [val, dbt, c] : [x.value, x.debt, x.currency]; }
 function nwItemRow(x, i) {
   const [v, vc] = itemShown(x);
+  const re = x.group === 'realEstate' && isNum(x.debt) && x.debt > 0 ? reParts(x) : null;
+  const sub = x.sub ? `<br><span class="muted small" dir="auto">${esc(x.sub)}</span>` : '';
+  const extra = re ? `<br><span class="muted small num" dir="ltr">value ${fmtC(re[0], re[2])} · mortgage ${fmtC(-re[1], re[2])} · net ${fmtC(v, vc)}</span>` : isDebtItem(x) ? '<br><span class="muted small">debt (not an asset)</span>' : '';
   const when = x.asOf ? `<span class="small ${x.stale ? 'stale' : 'muted'}"${x.stale ? ' title="Older than 90 days: update it"' : ''}>${x.stale ? '⚠ ' : ''}${fmtDay(x.asOf)}</span>` : `<span class="small muted">${esc(sourceTxt(x))}</span>`;
-  return `<button class="nwi" type="button" data-nwitem="${i}"><span class="grow"><span class="nm" dir="auto">${esc(x.name)}</span>${x.pending ? ' <span class="chip info">saved</span>' : ''}${x.sub ? `<br><span class="muted small" dir="auto">${esc(x.sub)}</span>` : ''}</span><span class="right"><span class="num">${fmtC(v, vc)}</span><br>${when}</span></button>`;
+  return `<button class="nwi" type="button" data-nwitem="${i}"><span class="grow"><span class="nm" dir="auto">${esc(x.name)}</span>${x.pending ? ' <span class="chip info">saved</span>' : ''}${sub}${extra}</span><span class="right"><span class="num ${isNum(v) && v < 0 ? 'down' : ''}">${fmtC(v, vc)}</span><br>${when}</span></button>`;
 }
 function renderNetworth() {
   const N = NW(), c = cur(), fx = fxNow();
@@ -1242,42 +1322,70 @@ function renderNetworth() {
   const T = N.total, tot = c === 'ILS' ? T.ils : T.usd, oc = c === 'ILS' ? 'USD' : 'ILS', other = c === 'ILS' ? T.usd : T.ils;
   const sumG = ids => N.groups.filter(g => ids.includes(g.id)).reduce((s, g) => s + g.usd, 0);
   const stale = N.items.filter(x => x.stale).length;
+  const B = N.balance || netBalance(N.items, fx), bI = c === 'ILS' && B.ils;
+  const bal = (usdK, ilsK) => (bI ? B.ils[ilsK] : inCur(B[usdK]));
+  const L = nwLines(N), lineUsd = id => { const l = L.find(y => y.id === id); return l ? l.usd : 0; };
+  const reGross = N.groups.find(g => g.id === 'realEstate');
   const kp = [
-    ['Net worth', fmtC(tot, c), '', 'hero', `<span class="muted num small">${isNum(other) ? fmtC(other, oc) + ' · ' : ''}USD/ILS ${fx ? fx.toFixed(3) : '—'}${N.fx && N.fx.date ? ' (' + fmtDay(N.fx.date) + ')' : ''}</span>`],
+    ['Net worth', fmtC(tot, c), '', 'hero', `<span class="muted num small">assets − debts · ${isNum(other) ? fmtC(other, oc) + ' · ' : ''}USD/ILS ${fx ? fx.toFixed(3) : '—'}${N.fx && N.fx.date ? ' (' + fmtDay(N.fx.date) + ')' : ''}</span>`],
+    ['Assets', fmtC(bal('assetsUsd', 'assets'), c), '', 'big', '<span class="muted small">markets, pension & funds, property value, cash</span>'],
+    ['Debts', fmtC(bal('debtsUsd', 'debts'), c), B.debtsUsd < 0 ? 'down' : '', 'big', `<span class="muted small num">mortgages ${fmtC(bal('mortgagesUsd', 'mortgages'), c)} · other ${fmtC(bal('otherDebtsUsd', 'otherDebts'), c)}</span>`],
     ['Markets', fmtC(inCur(sumG(['stocks', 'btcFunds', 'crypto', 'calls'])), c), ''], ['Pension & funds', fmtC(inCur(sumG(['pension', 'funds'])), c), ''],
-    ['Real estate, net', fmtC(inCur(sumG(['realEstate'])), c), ''], ['Cash', fmtC(inCur(sumG(['cash'])), c), ''],
+    ['Real estate (value)', fmtC(inCur(reGross ? (isNum(reGross.grossUsd) ? reGross.grossUsd : reGross.usd) : 0), c), ''], ['Cash', fmtC(inCur(lineUsd('cash')), c), ''],
     ['Values to update', String(stale), stale ? 'stalek' : 'up', 'last', `<span class="muted small">older than ${STALE_DAYS} days</span>`]
   ];
   $('#nwKpis').innerHTML = kp.map(([l, v, k, x, sub]) => `<div class="kpi ${x || ''}"><div class="label">${esc(l)}</div><div class="val ${k === 'stalek' ? 'stale' : k}">${v}</div>${sub || ''}</div>`).join('');
   $('#nwSub').textContent = N.items.length + ' items' + (T.unpriced ? ' · ' + T.unpriced + ' not priced' : '');
-  const pos = N.groups.reduce((s, g) => s + Math.max(0, g.usd), 0) || 1, maxV = Math.max(1, ...N.groups.map(g => Math.max(0, g.usd)));
-  $('#nwFilt').innerHTML = nwFilter ? `<div class="fbar"><span class="grow">Showing <b>${esc(NG_LABEL[nwFilter])}</b> only</span><button class="linkbtn" type="button" data-nwpie="${nwFilter}">Show all</button></div>` : '';
-  $('#nwGroups').innerHTML = N.groups.filter(g => !nwFilter || g.id === nwFilter).map(g => {
-    const open = nwOpen.has(g.id), v = c === 'ILS' ? g.ils : g.usd, col = NG_COLOR[g.id] || 'muted';
-    const items = N.items.map((x, i) => [x, i]).filter(([x]) => x.group === g.id).sort((a, b) => (b[0].usd || 0) - (a[0].usd || 0));
-    return `<li class="${open ? 'open' : ''}"><button class="nwg" type="button" data-nwg="${g.id}" aria-expanded="${open}"><div class="top"><i class="sw" style="background:var(--${col})"></i><span class="grow"><b>${esc(g.label)}</b> <span class="muted small">(${g.count})</span>${g.stale ? ` <span class="chip stalechip">${g.stale} to update</span>` : ''}</span><span class="num">${fmtC(v, c)}</span><span class="num muted small" style="width:46px;text-align:right">${(Math.max(0, g.usd) / pos * 100).toFixed(1)}%</span><span class="chevron" aria-hidden="true">›</span></div>
-      <div class="bar" aria-hidden="true"><i style="width:${(Math.max(0, g.usd) / maxV * 100).toFixed(1)}%;background:var(--${col})"></i></div>${g.id === 'realEstate' && isNum(g.debtUsd) && g.debtUsd > 0 ? `<div class="muted small num" style="margin-top:4px">value ${fmtC(inCur(g.grossUsd), c)} − mortgage ${fmtC(inCur(g.debtUsd), c)}</div>` : ''}</button>${open ? items.map(([x, i]) => nwItemRow(x, i)).join('') : ''}</li>`;
-  }).join('') + (nwFilter ? '' : `<li><div class="row" style="font-weight:600"><span class="grow">Total</span><span class="num">${fmtC(tot, c)}</span></div></li>`);
+  const pos = L.filter(g => !g.debt).reduce((s, g) => s + Math.max(0, g.usd), 0) || 1, maxV = Math.max(1, ...L.map(g => Math.abs(g.usd)));
+  $('#nwFilt').innerHTML = nwFilter ? `<div class="fbar"><span class="grow">Showing <b>${esc(nwFilter === 'debt' ? 'Debt' : NG_LABEL[nwFilter])}</b> only</span><button class="linkbtn" type="button" data-nwpie="${nwFilter}">Show all</button></div>` : '';
+  $('#nwGroups').innerHTML = L.filter(g => !nwFilter || g.id === nwFilter).map(g => {
+    const open = nwOpen.has(g.id), v = c === 'ILS' ? g.ils : g.usd, col = g.debt ? 'bad' : NG_COLOR[g.id] || 'muted';
+    const items = g.items.slice().sort((a, b) => g.debt ? (a[0].usd || 0) - (b[0].usd || 0) : (b[0].usd || 0) - (a[0].usd || 0));
+    return `<li class="${open ? 'open' : ''}"><button class="nwg" type="button" data-nwg="${g.id}" aria-expanded="${open}"><div class="top"><i class="sw" style="background:var(--${col})"></i><span class="grow"><b>${esc(g.label)}</b> <span class="muted small">(${g.count})</span>${g.stale ? ` <span class="chip stalechip">${g.stale} to update</span>` : ''}</span><span class="num ${g.debt ? 'down' : ''}">${fmtC(v, c)}</span><span class="num muted small" style="width:46px;text-align:right">${g.debt ? '' : (Math.max(0, g.usd) / pos * 100).toFixed(1) + '%'}</span><span class="chevron" aria-hidden="true">›</span></div>
+      <div class="bar" aria-hidden="true"><i style="width:${(Math.abs(g.usd) / maxV * 100).toFixed(1)}%;background:var(--${col})"></i></div>${g.id === 'realEstate' && isNum(g.debtUsd) && g.debtUsd > 0 ? `<div class="muted small num" style="margin-top:4px">value ${fmtC(inCur(g.grossUsd), c)} − mortgage ${fmtC(inCur(g.debtUsd), c)} = net ${fmtC(v, c)}</div>` : ''}</button>${open ? items.map(([x, i]) => nwItemRow(x, i)).join('') : ''}</li>`;
+  }).join('') + (nwFilter ? '' : `<li><div class="row" style="font-weight:600"><span class="grow">Net worth (assets − debts)</span><span class="num">${fmtC(tot, c)}</span></div></li>`);
   renderTotals(); renderRatios(); renderPieLegends();
   renderGrowthControls();
 }
 function openNwItem(i) {
   const N = NW(), x = N && N.items[i]; if (!x) return;
   const [v, vc] = itemShown(x), oc = x.currency === 'USD' ? 'ILS' : 'USD', ov = x.currency === 'USD' ? x.ils : x.usd;
-  const facts = [[x.group === 'realEstate' ? 'Net value' : 'Value', fmtC(v, vc)], ['In ' + (oc === 'ILS' ? 'shekels' : 'dollars'), fmtC(ov, oc)]];
+  const facts = [[x.group === 'realEstate' ? 'Net value' : isDebtItem(x) ? 'Debt' : 'Value', fmtC(v, vc)], ['In ' + (oc === 'ILS' ? 'shekels' : 'dollars'), fmtC(ov, oc)]];
   if (x.group === 'realEstate') facts.push(['Property value', fmtC(x.value, x.currency)], ['Mortgage left', fmtC(x.debt, x.currency)]);
+  else if (isDebtItem(x)) facts.push(['Debt left', fmtC(x.debt, x.currency)]);
   if (isNum(x.qty)) facts.push([x.group === 'calls' ? 'Contracts' : 'Quantity', qtyTxt(x.qty)]);
   if (isNum(x.cost)) facts.push(['Cost', fmtC(x.cost, x.currency)]);
   facts.push(['Last updated', x.asOf ? (x.stale ? `<span class="stale">⚠ ${fmtDay(x.asOf)} · ${x.ageDays} days ago</span>` : fmtDay(x.asOf)) : esc(sourceTxt(x))]);
-  if (x.raw && x.raw.bought) facts.push(['Bought', fmtDay(x.raw.bought)]);
+  const bday = x.raw && !x.raw.side && x.ref && x.ref.file === LF.holdings ? boughtOf(x.raw) : x.raw && x.raw.bought;
+  if (bday) facts.push(['Bought', fmtDay(bday) + (x.raw && !x.raw.bought ? ' <span class="muted small">(first lot)</span>' : '')]);
   const holding = x.ref && x.ref.file === LF.holdings, asset = x.ref && x.ref.file === LF.assets;
-  const btns = holding ? `<button class="btn primary" type="button" data-edit="change" data-i="${i}">Change</button><button class="btn" type="button" data-edit="sell" data-i="${i}">Sell</button><button class="btn" type="button" data-edit="remove" data-i="${i}">Remove</button>`
+  const stockHolding = holding && x.raw && !x.raw.side;
+  const btns = isDebtItem(x) ? `<button class="btn" type="button" data-edit="remove" data-i="${i}">Remove</button>` : holding ? `<button class="btn primary" type="button" data-edit="change" data-i="${i}">Change</button><button class="btn" type="button" data-edit="sell" data-i="${i}">Sell</button><button class="btn" type="button" data-edit="remove" data-i="${i}">Remove</button>`
     : asset ? `<button class="btn primary" type="button" data-edit="update" data-i="${i}">Update value</button><button class="btn" type="button" data-edit="change" data-i="${i}">Change details</button><button class="btn" type="button" data-edit="remove" data-i="${i}">Remove</button>` : '';
   openSheet(x.name, `<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap"><span class="chip neutral">${esc(NG_LABEL[x.group] || x.group)}</span><span class="chip neutral">${esc(x.currency)}</span>${x.sub ? `<span class="small muted" dir="auto">${esc(x.sub)}</span>` : ''}</div>
     <div class="facts">${facts.map(([k, val]) => `<div><div class="k">${esc(k)}</div><div class="num">${val}</div></div>`).join('')}</div>
     ${x.raw && x.raw.note ? `<p class="small" dir="auto" style="margin:0 0 10px">${esc(x.raw.note)}</p>` : ''}
+    ${stockHolding ? lotsHtml(x, i) : ''}
     ${x.stale ? `<p class="small stale" style="margin:0 0 10px">This value is older than ${STALE_DAYS} days. Tap Update value when you have a new statement.</p>` : ''}
+    ${isDebtItem(x) ? '<p class="muted small" style="margin:0 0 8px">A debt line (value 0): its amount is changed in the ledger file (assets.json) for now; the edit screens change property mortgages only.</p>' : ''}
     ${btns ? `<div class="btn-row" style="margin-top:6px">${btns}</div>` : '<p class="muted small">From the Portfolio sheet: not editable here until the ledger has your holdings.</p>'}`);
+}
+/* A holding's dated purchase lots (ledger LedgerStock.lots): date, quantity, price, gain and days held per lot. */
+function lotsHtml(x, i) {
+  const unit = isNum(x.value) && isNum(x.qty) && x.qty ? x.value / x.qty : null, L = lotsOf(x.raw, unit, todayLocal()), c = x.currency;
+  const add = `<button class="linkbtn" type="button" data-edit="lotadd" data-i="${i}">Add a lot</button>`;
+  if (!L.rows.length) return `<div class="ghead" style="margin-top:4px"><span>Lots</span>${add}</div><p class="muted small" style="margin:0 0 10px">No dated lots: the whole quantity counts as one buy${x.raw.bought ? ' on ' + fmtDay(x.raw.bought) : ''} at the average cost.</p>`;
+  const tr = L.rows.map(r => `<tr${r.implied ? ' class="muted"' : ''}><td>${r.implied ? 'rest (undated)' : r.date ? fmtDay(r.date) : 'undated'}${r.note ? `<div class="small muted" dir="auto">${esc(r.note)}</div>` : ''}</td><td class="n">${qtyTxt(r.qty)}</td><td class="n">${isNum(r.price) ? fmtC(r.price, c, 2) : '—'}</td><td class="n ${cls(r.gain)}">${isNum(r.gain) ? fmtC(r.gain, c) : '—'}${isNum(r.gainPct) ? `<div class="small">${pct(r.gainPct)}</div>` : ''}</td><td class="n">${isNum(r.heldDays) ? r.heldDays.toLocaleString('en-US') : '—'}</td><td>${r.implied ? '' : `<button class="linkbtn" type="button" data-edit="lotdel" data-i="${i}" data-lot="${r.index}" aria-label="Remove this lot">✕</button>`}</td></tr>`).join('');
+  return `<div class="ghead" style="margin-top:4px"><span>Lots</span>${add}</div><div class="scroll-x"><table class="small"><thead><tr><th>Bought</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Gain</th><th class="n">Days held</th><th></th></tr></thead><tbody>${tr}</tbody></table></div>`
+    + (L.problem ? `<p class="small stale" style="margin:6px 0 10px">⚠ ${esc(L.problem)}</p>` : '<p class="muted small" style="margin:6px 0 10px">The runs use the quantity and the average cost; the lots are for you (the rest is priced so the total cost stays the same).</p>');
+}
+function lotSpec(it) {
+  const x = it.raw, inLots = (Array.isArray(x.lots) ? x.lots : []).reduce((a, l) => a + (isNum(l.qty) ? l.qty : 0), 0), room = Math.round((x.qty - inLots) * 1e8) / 1e8;
+  return {
+    title: 'Add a lot to ' + it.name, intro: 'One buy as your broker shows it. ' + qtyTxt(room) + ' of your ' + qtyTxt(x.qty) + ' are not in a dated lot yet. After a split: the post-split numbers, the old ones in the note.',
+    fields: [{ k: 'date', label: 'Bought on', type: 'date', past: true, hint: 'Empty: an undated lot.' }, { k: 'qty', label: 'Quantity', type: 'number', req: true, gt: 0, maxv: room }, { k: 'price', label: 'Price per unit', type: 'number', req: true, min: 0 }, { k: 'note', label: 'Note', type: 'text', max: 120 }],
+    build: v => ({ kind: 'lot', file: LF.holdings, item: Object.assign({ op: 'add', id: x.id, date: v.date || null, qty: v.qty, price: v.price }, opt('note', v.note)), title: 'Add a lot', summary: [['Holding', it.name], ['Bought', v.date ? fmtDay(v.date) : 'undated'], ['Quantity', qtyTxt(v.qty)], ['Price', fmtC(v.price, x.currency, 2)], ['Cost', fmtC(v.qty * v.price, x.currency)], ...(v.note ? [['Note', v.note, true]] : [])] }),
+  };
 }
 function flowAmt(f, c) { c = c || cur(); const v = c === 'ILS' ? f.ils : f.usd; if (isNum(v)) return v; const fx = fxNow(); return f.currency === c ? f.amount : fx ? (c === 'ILS' ? f.amount * fx : f.amount / fx) : null; }
 function flowBtn(f) {
@@ -1288,6 +1396,7 @@ function renderPending() {
   const G = D && D.growth, fl = G ? G.flows : [], N = NW();
   const sug = fl.filter(f => f.suggested), recent = fl.filter(f => !f.suggested).slice(-4).reverse();
   let h = '';
+  if (N && Array.isArray(N.checks) && N.checks.length) h += `<div class="ghead"><span>To check (${N.checks.length})</span></div><ul class="list">` + N.checks.map(t => `<li class="small stale" dir="auto">⚠ ${esc(t)}</li>`).join('') + '</ul>';
   if (sug.length) h += `<div class="ghead"><span>Waiting for you (${sug.length})</span></div><ul class="list">` + sug.map(f => `<li><div style="display:flex;gap:6px;align-items:center">${flowBtn(f)}<button class="btn sm" type="button" data-edit="confirm" data-flow="${esc(f.id)}">Confirm</button><button class="btn sm" type="button" data-edit="dismiss" data-flow="${esc(f.id)}">Dismiss</button></div></li>`).join('') + '</ul>';
   if (recent.length) h += `<div class="ghead"><span>Recent</span></div><ul class="list">` + recent.map(f => `<li>${flowBtn(f)}</li>`).join('') + '</ul>';
   if (!fl.length) h += '<p class="muted small" style="margin:0">No money in or out yet. Add one when you deposit or withdraw: the graph marks it, and the "without deposits" line leaves it out.</p>';
@@ -1600,6 +1709,8 @@ function doEdit(what, el) {
   else if (what === 'change' && x && x.raw) openForm(x.ref.file === LF.assets ? assetSpec(x.raw) : x.raw.side ? optionSpec(x.raw) : stockSpec(x.raw), Object.assign({ type: x.raw.side ? 'option' : 'stock' }, rawOf(x.raw)));
   else if (what === 'update' && x && x.raw) openForm(assetSpec(x.raw, null, true), Object.assign(rawOf(x.raw), { asOf: todayLocal() }));
   else if (what === 'sell' && x && x.raw) openForm(sellSpec(x), { qty: String(x.qty), sold: todayLocal() });
+  else if (what === 'lotadd' && x && x.raw && !x.raw.side) openForm(lotSpec(x));
+  else if (what === 'lotdel' && x && x.raw && Array.isArray(x.raw.lots) && x.raw.lots[+el.dataset.lot]) { const k = +el.dataset.lot, l = x.raw.lots[k]; confirmEdit({ kind: 'lot', file: LF.holdings, item: { op: 'remove', id: x.raw.id, index: k, date: l.date == null ? null : l.date, qty: l.qty, price: l.price }, title: 'Remove a lot', summary: [['Holding', x.name], ['Lot', (l.date ? fmtDay(l.date) : 'undated') + ' · ' + qtyTxt(l.qty) + ' @ ' + fmtC(l.price, x.currency, 2)], ['Then', 'its quantity joins the undated rest']] }); }
   else if (what === 'remove' && x && x.ref) { const [v, vc] = itemShown(x); confirmEdit({ kind: 'remove', file: x.ref.file, item: { id: x.ref.id }, title: 'Remove', summary: [['Remove', x.name, true], ['Group', NG_LABEL[x.group]], ['Value now', fmtC(v, vc)], ['Note', x.ref.file === LF.holdings ? 'Selling? Use Sell instead, so it shows in History.' : 'It leaves the net worth from now on.']] }); }
   else if ((what === 'confirm' || what === 'dismiss') && fl) { const a = fl.amount; confirmEdit({ kind: 'flow', file: LF.flows, item: { op: what, id: fl.id }, title: what === 'confirm' ? 'Confirm money in / out' : 'Dismiss the suggestion', summary: [[what === 'confirm' ? 'Confirm' : 'Dismiss', (a > 0 ? '▲ in ' : '▼ out ') + fmtC(Math.abs(a), fl.currency)], ['Date', fmtDay(fl.date)], ['Group', NG_LABEL[fl.group]], ['Then', what === 'confirm' ? 'it counts in "without deposits"' : 'the mark goes away']] }); }
 }

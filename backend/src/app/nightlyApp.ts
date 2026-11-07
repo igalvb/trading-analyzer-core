@@ -29,7 +29,14 @@
  *                     with its own gated read (optionsSeedFor) and also with options off (the 📈 row, the Buy report
  *                     line, Decision History, the paper twin). Off = shadow (A-8): each analysis computes its "if applied"
  *                     numbers; the decisions use the options snapshot exactly as before.
- * The nightly makes no AI call (F-W11). One portfolio reader: the Portfolio sheet (F8).
+ *   washout           profile `alerts.washout` 'on' (owner 2026-11-07, jobs/washout/washoutAlert.ts): after the analysis,
+ *                     the W1 washout at tonight's close of each holding and watchlist stock with Strong fundamentals;
+ *                     a line in the Buy report (decorate), the Telegram lines are sent by nightly.ts. Display only.
+ *   eventCheck        profile `alerts.eventCheck` 'on' (owner 2026-11-07, jobs/washout/eventCheck.ts): on a sharp market or
+ *                     stock fall, the fall's type, long-fall signals, verdict and sizing hint next to each washout line
+ *                     and in an "Event check" block of the Buy report; nothing on a quiet night. Display only.
+ * The nightly makes no AI call (F-W11), except the event check's optional ONE Gemini sentence per check (alerts.eventCheck
+ * on, features.ai on and a GEMINI_API_KEY in the run; never Opus). One portfolio reader: the Portfolio sheet (F8).
  */
 
 import { textLog } from '../core/logger.ts';
@@ -78,13 +85,21 @@ import type { CboeFetchStats, CboeRawMemo } from '../fetch/cboe.ts';
 import { activeProfile } from '../profile/active.ts';
 import { PAPER_OWNER_LIST } from '../paper/paperLab.ts';
 import { OPTIONS_READ_APPLIED, seedOptionsWorkbook, shadowLine } from '../analysis/options/nightlyRead.ts';
-import { runFundamentalsHistoryNight } from '../storage/fundamentalsHistory.ts';
+import { runFundamentalsHistoryNight, FUNDAMENTALS_HISTORY_TAB, FUNDAMENTALS_HISTORY_HEADER } from '../storage/fundamentalsHistory.ts';
+import { runBusinessAlerts } from '../jobs/exit/businessAlerts.ts';
+import type { ExitPipelineResult } from '../jobs/exit/exitPipeline.ts';
 import { formatDateInTz } from '../core/dates.ts';
 import { orElseAsync } from '../core/guard.ts';
 import { dataBranchDir, readLedgerJson } from '../ledger/store.ts';
 import { toPortfolio } from '../ledger/toPortfolio.ts';
 import { LEDGER_FILES } from '../ledger/schema.ts';
 import type { LedgerMode } from '../profile/schema.ts';
+import { gatherWashoutCandidates, gatherWashoutNight, washoutAlertsOn, type WashoutCandidate, type WashoutNight } from '../jobs/washout/washoutAlert.ts';
+import { EVENT_BLOCK_HEADING, eventBlockLines, eventCheckOn, eventSuffix, gatherEventNight, sectorEtfOf, type EventNight, type Series } from '../jobs/washout/eventCheck.ts';
+import { fundPointOf, historyByTicker } from '../jobs/exit/businessAlerts.ts';
+import { fundamentalsRecordOf } from '../storage/fundamentalsHistory.ts';
+import { readMacroSnapshot } from '../storage/macroCaches.ts';
+import { createGeminiHttpTransport, generateGeminiText } from '../ai/geminiTransport.ts';
 import { measuresOfNight, optionsRunReport, recordOptionsNight, runOptionsChains, shadowInputOf, type OptionsNight } from '../jobs/options/optionsNight.ts';
 
 export interface NightlyAppOptions {
@@ -103,6 +118,13 @@ export interface NightlyApp {
   readonly watchlist: readonly string[];
   /** Row 29: what the Buy and Exit steps built tonight, for the Telegram digest (empty until they run). */
   readonly digest: DigestCapture;
+  /**
+   * Tonight's Washout ADD alert hits (memoised; null when profile alerts.washout is off or the read failed). With
+   * profile alerts.eventCheck on, each hit's line carries its event check.
+   */
+  readonly washout: () => Promise<WashoutNight | null>;
+  /** Tonight's event check (memoised; null when profile alerts.eventCheck is off, on a quiet night, or the read failed). */
+  readonly eventCheck: () => Promise<EventNight | null>;
 }
 
 const NIGHTLY_TICKER_TIMEOUT_MS = 10 * 60_000;
@@ -200,6 +222,53 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
   const dp = s.darkPoolDeps;
   const getChart = async (t: string): Promise<Chart | null> => { const c = await s.fetchChart(t); return c ? toAnalysisChart(c as never) : null; };
   const digest: DigestCapture = {};
+  // The Washout ADD alert (profile alerts.washout) and the event check (alerts.eventCheck): read once, after the
+  // analysis (the Buy report's decorate or nightly.ts). Both share tonight's candidates (held + watchlist charts).
+  let washoutMemo: Promise<WashoutNight | null> | null = null;
+  let eventMemo: Promise<EventNight | null> | null = null;
+  let candMemo: Promise<WashoutCandidate[]> | null = null;
+  const nyDay = (d: Date): string => formatDateInTz(d, 'America/New_York');
+  const nyToday = (): string => nyDay(new Date(s.clock.now()));
+  const series = (c: { readonly dates: readonly Date[]; readonly closes: readonly number[] } | null | undefined): Series | null => (c && c.closes.length ? { dates: c.dates.map(nyDay), closes: c.closes } : null);
+  const settled = async (t: string) => (attempts.has(t) ? settledWithin(cache.get(t), 5_000) : null);
+  const washoutDeps = {
+    held: summary.positions.map((p) => p.ticker), watchlist: wl.tickers, kv: s.kv,
+    chart: async (t: string) => series(await s.fetchChart(t)),
+    fundScore: async (t: string) => {
+      const v = (await settled(t))?.result?.fundResult?.score;
+      return typeof v === 'number' && Number.isFinite(v) ? v : null;
+    },
+    indexCloses: async () => (await s.fetchChart(activeProfile().benchmarks.index))?.closes ?? null,
+  };
+  const candidates = (): Promise<WashoutCandidate[]> => (candMemo ??= gatherWashoutCandidates(washoutDeps, log));
+  const eventCheck = (): Promise<EventNight | null> => {
+    if (!eventCheckOn(activeProfile())) return Promise.resolve(null);
+    // Gemini only (free), one sentence per check, when the run has a key and AI is on; never Opus.
+    const gem = activeProfile().features.ai && s.geminiKey ? createGeminiHttpTransport(s.http, s.geminiKey) : null;
+    eventMemo ??= orElseAsync(ctx.log.child('eventCheck'), 'event check read (no event check tonight)', () => gatherEventNight({
+      today: nyToday(), indexTicker: activeProfile().benchmarks.index, candidates,
+      chart: async (t) => series(await s.fetchChart(t)),
+      rawChart: async (t) => series(await fetchYahooChartRaw(s.http, t, '2y')),
+      sectorEtf: async (t) => { const a = await settled(t); return a && !a.aborted ? sectorEtfOf(a.fund?.industry, a.chart?.sectorRS?.etf) : null; },
+      latest: async (t) => { const a = await settled(t); const r = a && !a.aborted ? fundamentalsRecordOf(a, nyToday()) : null; return r ? fundPointOf(r) : null; },
+      history: async () => { const rows = await s.tabStore.read(FUNDAMENTALS_HISTORY_TAB, FUNDAMENTALS_HISTORY_HEADER.length); return rows ? historyByTicker(rows) : null; },
+      dgs10: async () => { const m = await readMacroSnapshot(s.tabStore, s.clock.now()); return Array.isArray(m?.dgs10) ? (m.dgs10 as unknown[]).filter((v): v is number => typeof v === 'number') : null; },
+      ai: gem ? async (prompt) => { const r = await generateGeminiText({ transport: gem, policy: { maxAttempts: 2 } }, prompt); return r.ok ? r.text : null; } : null,
+    }, log), null);
+    return eventMemo;
+  };
+  const washout = (): Promise<WashoutNight | null> => {
+    if (!washoutAlertsOn(activeProfile())) return Promise.resolve(null);
+    washoutMemo ??= orElseAsync(ctx.log.child('washout'), 'washout alert read (no alert tonight)', async () => {
+      const wn = await gatherWashoutNight({ ...washoutDeps, today: nyToday() }, log, await candidates());
+      const ev = wn.hits.length ? await eventCheck() : null;
+      if (!ev) return wn;
+      const by = new Map(ev.stocks.map((c) => [c.subject, c] as const));
+      return { ...wn, hits: wn.hits.map((h) => { const c = by.get(h.ticker); return c ? { ...h, line: h.line + ' ' + eventSuffix(c) } : h; }) };
+    }, null);
+    return washoutMemo;
+  };
+  const bizMode = activeProfile().exit.businessAlerts;
 
   const jobs: NightlyDeps['jobs'] = {
     // F-N1: the same computations as jobs/darkPool.ts, without the swallowing try/catch.
@@ -277,8 +346,12 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
           if (sh) lines.push(shadowLine(sh, OPTIONS_READ_APPLIED));
         }
         const rep = optionsRunReport(night);
+        const wn = await washout();
+        const evLines = eventBlockLines(await eventCheck(), new Set((wn?.hits ?? []).map((h) => h.ticker)));
         return {
           ...input,
+          ...(wn && wn.hits.length ? { washoutLines: wn.hits.map((h) => h.line) } : {}),
+          ...(evLines.length ? { eventCheck: { heading: EVENT_BLOCK_HEADING, lines: evLines } } : {}),
           ...(lines.length ? { optionsReads: { lines, missing: rep ? rep.missing : [], applied: OPTIONS_READ_APPLIED } } : {}),
           ...(night?.marketLine ? { marketOptionsLine: night.marketLine } : {}),
         };
@@ -336,6 +409,25 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
       },
       // Owner 2026-11-05: the weekly-stop exit rules, behind the profile flag exit.weeklyStops (default off).
       ...(activeProfile().exit.weeklyStops ? { options: { weeklyStops: true } } : {}),
+      // Owner 2026-11-07: the business-based exit alerts, behind exit.businessAlerts (off | shadow | on; default off).
+      // Shadow = an Exit report section and run-log lines; on = also one Telegram line per new alert. No verdict changes.
+      // The market shock is a buy point (owner yes 2026-11-07): its one line goes to Telegram in shadow too.
+      ...(bizMode !== 'off' ? {
+        businessAlerts: async (c: RunContext, run: ExitPipelineResult) => {
+          const token = (process.env.TELEGRAM_BOT_TOKEN ?? '').trim(), chatId = (process.env.TELEGRAM_CHAT_ID ?? '').trim();
+          const stocks = new Set(run.holdings.filter((h) => h.kind === 'STOCK').map((h) => h.ticker.toUpperCase()));
+          const r = await runBusinessAlerts({
+            mode: bizMode, today: formatDateInTz(new Date(s.clock.now()), s.timeZone), timeZone: s.timeZone,
+            tickers: run.holdings.map((h) => h.ticker),
+            // Only analyses this run already made (the Exit pipeline's stocks, the ticker phase): never a new one.
+            analysis: async (t) => (stocks.has(t) || attempts.has(t) ? settledWithin(cache.get(t), 5_000) : null),
+            readHistory: () => s.tabStore.read(FUNDAMENTALS_HISTORY_TAB, FUNDAMENTALS_HISTORY_HEADER.length),
+            getChart, kv: s.kv, log: c.log.child('exit.businessAlerts'),
+            telegram: token && chatId ? { deps: { token }, chatId } : null,
+          });
+          return r.view;
+        },
+      } : {}),
       openWorkbook: () => s.openWorkbook([EXIT_SHEET_TAB, EXIT_TARGET_HISTORY_SHEET]),
       onBuilt: (input, _r, wb) => { digest.exit = { input, sheet: wb.getSheetByName(EXIT_SHEET_TAB) }; },
       decorate: (input) => (night?.marketLine ? { ...input, marketOptionsLine: night.marketLine } : input),
@@ -379,7 +471,7 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
     ...(o.concurrency ? { concurrency: o.concurrency } : {}),
     ...(o.skip ? { skip: o.skip } : {}),
   };
-  return { deps, options, cache, portfolio, watchlist: wl.tickers, digest };
+  return { deps, options, cache, portfolio, watchlist: wl.tickers, digest, washout, eventCheck };
 }
 
 /** The promise's value when it settles within `ms`; null when it rejects or is still pending. */

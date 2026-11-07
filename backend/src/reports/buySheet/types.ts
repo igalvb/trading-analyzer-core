@@ -127,6 +127,13 @@ export interface BuyReportInput {
   readonly optionsReads?: { readonly lines: readonly string[]; readonly missing: readonly string[]; readonly applied: boolean } | null;
   /** Options sentiment part B (display only): the market options line (SPY / QQQ); shown under the banner when set. */
   readonly marketOptionsLine?: string | null;
+  /** The Washout ADD alert (profile alerts.washout, display only): one line per stock whose washout fired tonight. */
+  readonly washoutLines?: readonly string[] | null;
+  /**
+   * The event check (profile alerts.eventCheck, display only): on a sharp market or stock fall, the block's heading and
+   * lines (jobs/washout/eventCheck.ts). Absent / empty = no block (a quiet night).
+   */
+  readonly eventCheck?: { readonly heading: string; readonly lines: readonly string[] } | null;
 }
 
 export type OpusMode = 'REVIEW' | 'STANDALONE' | 'OFF';
