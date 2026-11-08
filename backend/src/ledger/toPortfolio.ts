@@ -35,7 +35,10 @@ export function toPortfolio(h: LedgerHoldings): PortfolioResult {
 const day = (d: Date | null | undefined): string => calendarDay(d) ?? '-';
 const n = (x: number | null | undefined): string => (x == null ? '-' : String(Math.round(x * 1e6) / 1e6));
 const stockKey = (s: StockHolding): string => s.ticker;
-const stockText = (s: StockHolding): string => 'qty ' + n(s.shares) + ', cost ' + n(s.avgCost) + ', bought ' + (s.entryDateAssumed ? 'assumed' : day(s.entryDate));
+// Fix 2026-11-07: a holding is the SAME when its quantity matches. The ledger carries corrected costs and real buy dates
+// from the owner's statements, so cost and date are reported apart (ledgerRefinements), not as differences.
+const stockText = (s: StockHolding): string => 'qty ' + n(s.shares);
+const stockDetail = (s: StockHolding): string => 'cost ' + n(s.avgCost) + ', bought ' + (s.entryDateAssumed ? 'assumed' : day(s.entryDate));
 const optionKey = (o: OptionHolding): string => o.ticker + ' ' + o.side + ' ' + n(o.strike) + ' ' + day(o.expiry);
 const optionText = (o: OptionHolding): string => 'contracts ' + n(o.contracts) + ', premium ' + n(o.avgPremium) + ', bought ' + day(o.entryDate);
 
@@ -56,6 +59,18 @@ function diffBy<T>(kind: string, sheet: readonly T[], ledger: readonly T[], key:
 }
 
 /** Sheet vs ledger: same stocks (quantity, cost, purchase date), options (contracts, premium, date) and crypto list. */
+/** Same holdings (by quantity) whose cost or buy date the ledger has refined: 'TSLA: cost 332.38 -> 332.3354, bought assumed -> 2021-06-14'. */
+export function ledgerRefinements(sheet: PortfolioResult, ledger: PortfolioResult): string[] {
+  const out: string[] = [];
+  for (const a of sheet.stocks) {
+    const b = ledger.stocks.find((x) => x.ticker === a.ticker && x.shares === a.shares);
+    if (!b) continue;
+    const da = stockDetail(a), db = stockDetail(b);
+    if (da !== db) out.push(a.ticker + ': ' + da + ' -> ' + db);
+  }
+  return out;
+}
+
 export function compareHoldings(sheet: PortfolioResult, ledger: PortfolioResult): string[] {
   const crypto = (p: PortfolioResult): string[] => [...p.skippedCrypto].sort();
   const cs = crypto(sheet), cl = crypto(ledger);

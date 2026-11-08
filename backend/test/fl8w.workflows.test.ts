@@ -140,6 +140,13 @@ describe('FL-8w (a) every workflow file has a sane YAML shape', () => {
     assert.ok(ledger.includes('git push -q origin HEAD:data') && !/origin (HEAD:)?main\b/.test(t), 'only the data branch, never main');
     assert.ok(ledger.includes('git add ledger/snapshots.jsonl'), 'only the snapshot file is committed');
     assert.match(stepWith(main, 'Keep the ledger snapshot'), /git -C data-branch status --porcelain -- ledger\/snapshots\.jsonl/);
+    // The advice journal (ledger/journal.ts, additive 2026-11-08): checked, uploaded and committed with the snapshot,
+    // merged line by line (append-only: lines already on the branch are kept), with no new trigger.
+    assert.match(stepWith(main, 'Keep the ledger snapshot'), /status --porcelain -- [^\n]*ledger\/journal\.jsonl/);
+    assert.match(stepWith(main, 'Upload the ledger snapshot'), /^ {12}data-branch\/ledger\/journal\.jsonl$/m);
+    assert.ok(ledger.includes('if [ -f ledger/journal.jsonl ]; then git add ledger/journal.jsonl; fi'), 'the journal is committed when present');
+    assert.ok(ledger.includes('grep -vxF -f ledger/journal.jsonl "$new/journal.jsonl" >> ledger/journal.jsonl'), 'the journal is appended to, never overwritten');
+    assert.ok(ledger.indexOf('>> ledger/journal.jsonl') < ledger.indexOf('git commit'), 'merged before the commit');
     assert.match(main, /ref: data\n {10}path: data-branch/);
     assert.doesNotMatch(t, /^ {2}(push|pull_request|schedule):/m, 'no new trigger');
   });

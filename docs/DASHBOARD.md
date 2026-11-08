@@ -14,6 +14,17 @@ zone, stop, target, horizon, reason, open or closed), from the reports tab `🤖
 (`-` = none; a bad row is refused with one line). The Status cell starts `open`; edit it to `closed: <outcome>` by
 hand. When tonight's close is known the dashboard shows where the price is against the zone.
 
+**📓 Advice journal** (More → Journal; additive 2026-11-08): every piece of advice the system and Claude gave, from
+`ledger/journal.jsonl` on the `data` branch (docs/LEDGER.md "The advice journal"), with whether you acted and whether
+it was right, computed at each build. A **scorecard per source** (Exit report, Buy report, Washout, Market shock,
+Business alert, Event check, Claude idea, Claude chat): how many, followed %, hit rate at the horizon picked (+1 week ·
++1 month · +3 months · +1 year), right · wrong · pending, and the $ value of following vs what you did (at $5,000 per
+advice, before tax). A bar chart of the hit rate per horizon (the self-hosted chart library). Below, one card per
+advice, newest first: price and QQQ then, acted (with the trade's day), and per horizon the stock's return, QQQ's, the
+difference, right / wrong / pending / info, and $ if followed. Filters: source, advice, acted, right at the horizon,
+ticker, from / to dates. The tickers and QQQ are read from the long price history (`LONG_HISTORY_DIR`) plus tonight's
+closes; a ticker with no history says "no data". No journal file yet: the section is left out (Settings → Data).
+
 Nothing here is needed for the reports: without the two Cloudflare secrets the runs skip the dashboard step silently.
 
 | Part | Where | What it does |
@@ -123,8 +134,15 @@ checked-out `data` branch (`DATA_BRANCH_DIR`, default `<repo>/data-branch`); wit
 `growth` are left out (Settings → Data → "Sections missing") and the page opens on the Overview.
 
 **Net worth** (the first tab): everything you own, by group (Stocks · Bitcoin funds · Crypto · Calls · Pension · Other
-funds · Real estate · Cash) with a bar each, the group totals and the grand total, in **$ or ₪** (the toggle; the rate
-is the day's USD/ILS of the newest snapshot). Stocks, crypto and calls are priced live from the Portfolio section
+funds · Real estate · Cash) with a bar each, the group totals and the grand total, in **$ · ₪ · %** (one switch,
+remembered on the phone; the rate is the day's USD/ILS, else the newest snapshot's). **%** shows every figure that has
+a base as a percent instead: the net worth change, each group's change, each holding's gain (value against cost), each
+lot's gain and the change chips (the arithmetic stays in the last currency picked). **Change chips** like Yahoo's:
+1D · 1W · 1M · YTD · 1Y · 3Y · 5Y · All under the top cards (the change in $ or ₪ and in %, from the point where the
+range starts to now: the last point on or before the start day, 1D the previous point, YTD the last day of last year);
+tap one and the net worth card and every group show that range; an open group shows its own row of chips. A chip whose
+start point is estimated (below) says **est.**; a group with no history at that start (pension, funds, real estate,
+cash, calls and coins before the first snapshot) shows —. Stocks, crypto and calls are priced live from the Portfolio section
 (tonight's close, else the Exit report's, else the sheet's); a price you typed (`manualPrice`) wins. Names are shown
 exactly as you wrote them (Hebrew too, right-to-left). Pension, funds, real estate and cash show the date you last
 typed the value: **amber when older than 90 days**. Real estate counts net (value − mortgage); each property row shows
@@ -140,10 +158,28 @@ with assets; per person when an asset has a `person`), and the ratio cards from 
 a price over a price, `A bag/B` your whole holding of A over B's price; the card shows today's ratio as a % of your
 target; no file, no cards).
 
-**Growth graph**: one line per night from `ledger/snapshots.jsonl`, starting on the migration day (no older history;
-with fewer than two nights it says "the graph starts filling from <day>"). Filter chips per group (tap to add or take
-away; **only** or a long press: only that group), Stacked or Lines, ranges 1M · 3M · YTD · 1Y · 5Y · All, two sliders
-for any window, $ or ₪. **Money in / out** marks: ▲ in, ▼ out on the day, hollow while a run only suggests it; tap a
+**Growth graph**: one line per night from `ledger/snapshots.jsonl`, and before the first night an **estimated past**
+(below), so the graph is not empty; with neither it says "the graph starts filling from <day>". The time axis is to
+scale (the estimate's points are sparser). Filter chips per group (tap to add or take away; **only** or a long press:
+only that group), Stacked or Lines, ranges 1M · 3M · YTD · 1Y · 3Y · 5Y · All, two sliders for any window, $ · ₪ · %.
+In **%** every line is rebased to 0% on the first day shown (each group from its own first value, "without deposits"
+from the total's) and the graph shows lines; the money in / out marks stay.
+
+**Estimated history** (additive 2026-11-07, `backend/src/ledger/estimate.ts`, `growth.estimate` in the JSON): at each
+build the market groups are rebuilt from the long price history (the `prices` branch, checked out at `long-history/`,
+`LONG_HISTORY_DIR`; read whatever `LONG_HISTORY` says, display only) as **today's quantities × each day's close**, at
+**today's USD/ILS**, from 2020-01-01 (or a ticker's first bar: a fund listed in 2024 starts then) to the day before the
+first real snapshot. Points: month ends before two years ago, Fridays within two years, every trading day within 90
+days (about 220 points, ~10-20 KB). Every date the ledger knows is used: each **dated lot** from its day; a holding's
+**`bought`** day (before it: not held); **closed positions** between `bought` and `sold` (stocks, funds and coins priced
+from history with their quantity, options flat at their cost; no sell day: left out); **calls flat at their cost** from
+their buy day (not priced from history); only with **no date** is a holding assumed held the whole time. A holding with
+no price series (coins today: none on the `prices` branch) is drawn flat at today's value so the line has no cliff
+where the snapshots begin. Drawn **dashed and faded**, labelled "estimated (today's holdings)"; the note under the graph
+says how many holdings had real dates, partly dated or none, and which tickers had no history. Real snapshots replace it
+from their first day. Pension, funds, real estate and cash are not rebuilt: by default, while estimated days are shown,
+the graph shows the **markets only** (labelled); the **Include static (flat)** chip adds them flat at today's value.
+The change chips always take them flat (unknown = unchanged) for the net worth total. **Money in / out** marks: ▲ in, ▼ out on the day, hollow while a run only suggests it; tap a
 mark (or its chip under the graph) for the date, amount, group and note, and to confirm or dismiss a suggestion.
 
 **Growth without deposits** (the dashed line): the value minus the net money put in since the first day shown:

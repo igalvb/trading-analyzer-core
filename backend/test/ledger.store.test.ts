@@ -12,7 +12,7 @@ import path from 'node:path';
 import {
   appendLedgerJsonl, appendSnapshot, appendSnapshots, checkSchema, dataBranchDir, LedgerFormatError, ledgerPath, readLedgerJson, readLedgerJsonl, writeLedgerJson,
 } from '../src/ledger/store.ts';
-import { compareHoldings, toPortfolio } from '../src/ledger/toPortfolio.ts';
+import { compareHoldings, ledgerRefinements, toPortfolio } from '../src/ledger/toPortfolio.ts';
 import { buildSnapshot } from '../src/ledger/snapshot.ts';
 import { runLedgerNight, type LedgerNightDeps } from '../src/ledger/night.ts';
 import { LEDGER_SCHEMA, type LedgerAssets, type LedgerHoldings } from '../src/ledger/schema.ts';
@@ -107,7 +107,11 @@ describe('toPortfolio: the PortfolioResult the runs read', () => {
       options: [{ ...HOLDINGS.options[0]!, strike: 65 }],
     };
     const d = compareHoldings(sheet, toPortfolio(changed));
-    assert.ok(d.includes('stock AAPL: sheet qty 10, cost 150, bought assumed / ledger qty 11, cost 150, bought assumed'), d.join('\n'));
+    assert.ok(d.includes('stock AAPL: sheet qty 10 / ledger qty 11'), d.join('\n'));
+    // Fix 2026-11-07: a corrected cost or a real buy date in the ledger is not a difference; it is listed apart.
+    const refinedLedger = toPortfolio({ ...HOLDINGS, stocks: HOLDINGS.stocks.map((s) => (s.ticker === 'AAPL' ? { ...s, avgCost: 149.5, bought: '2021-06-14' } : s)) });
+    assert.deepEqual(compareHoldings(sheet, refinedLedger).filter((x) => x.startsWith('stock AAPL')), []);
+    assert.ok(ledgerRefinements(sheet, refinedLedger).some((x) => /^AAPL: cost 150, bought assumed -> cost 149\.5, bought 2021-06-14$/.test(x)), ledgerRefinements(sheet, refinedLedger).join('\n'));
     assert.ok(d.some((x) => /^stock FBTC: in the sheet only/.test(x)) && d.some((x) => /^stock IBIT: in the ledger only/.test(x)));
     assert.ok(d.some((x) => /^option KO call 60 2027-06-17: in the sheet only/.test(x)) && d.some((x) => /^option KO call 65/.test(x)));
     assert.ok(d.includes('crypto: sheet DOGE, ETH / ledger ETH'));
@@ -149,7 +153,8 @@ describe('the Nightly per storage.ledger', () => {
     const r = await runLedgerNight(deps(root, 'shadow', lines));
     assert.deepEqual(r, { differences: [], snapshot: 'added' });
     assert.ok(lines[0]!.startsWith('INFO ledger shadow: the ledger holds the same holdings as the sheet (2 stock(s), 1 option(s), 2 crypto)'));
-    assert.match(lines[1]!, /^INFO ledger snapshot 2026-11-06: appended, total \$276,710 at USD\/ILS 4$/);
+    assert.ok(lines.some((l) => /^INFO ledger snapshot 2026-11-06: appended, total \$276,710 at USD\/ILS 4$/.test(l)), lines.join('\n'));
+    assert.ok(!lines.some((l) => l.startsWith('WARN')), lines.join('\n'));
     assert.equal((await runLedgerNight(deps(root, 'shadow', lines))).snapshot, 'exists');
     assert.equal(readLedgerJsonl(root, 'snapshots').length, 1);
   });

@@ -3,7 +3,7 @@
  * (relative to backend/, i.e. the folder the workflow checks the branch out into at the repository root).
  *
  *   JSON files (holdings, assets, watchlist)  pretty-printed (2 spaces, a final newline), written whole
- *   JSONL files (flows, snapshots, edits)     one object per line, APPEND-ONLY (a line is never rewritten)
+ *   JSONL files (flows, snapshots, edits, journal)  one object per line, APPEND-ONLY (a line is never rewritten)
  *
  * Every file and every line carries `schema`; a reader refuses a NEWER schema (this code would misread it) and a
  * file that is not valid JSON, with one plain line naming the file. A missing file reads as null / [].
@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { orElse } from '../core/guard.ts';
-import { LEDGER_FILES, LEDGER_SCHEMA, type LedgerAssets, type LedgerEdit, type LedgerFlow, type LedgerHoldings, type LedgerSnapshot, type LedgerPrices, type LedgerTargets, type LedgerWatchlist } from './schema.ts';
+import { LEDGER_FILES, LEDGER_SCHEMA, type LedgerAssets, type LedgerEdit, type LedgerFlow, type LedgerJournalEntry, type LedgerHoldings, type LedgerSnapshot, type LedgerPrices, type LedgerTargets, type LedgerWatchlist } from './schema.ts';
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -23,7 +23,7 @@ export function dataBranchDir(env: Env = process.env, cwd: string = process.cwd(
 }
 
 export interface JsonFiles { readonly holdings: LedgerHoldings; readonly assets: LedgerAssets; readonly watchlist: LedgerWatchlist; readonly targets: LedgerTargets; readonly prices: LedgerPrices }
-export interface JsonlFiles { readonly flows: LedgerFlow; readonly snapshots: LedgerSnapshot; readonly edits: LedgerEdit }
+export interface JsonlFiles { readonly flows: LedgerFlow; readonly snapshots: LedgerSnapshot; readonly edits: LedgerEdit; readonly journal: LedgerJournalEntry }
 
 export class LedgerFormatError extends Error {
   constructor(message: string) { super(message); this.name = 'LedgerFormatError'; }

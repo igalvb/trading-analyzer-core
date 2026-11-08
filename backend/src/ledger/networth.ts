@@ -11,6 +11,11 @@
  *   buildGrowth     the snapshots (one line per day) and the money-in/out flows for the graph and its marks
  *   withoutFlows    "growth without deposits": the value minus the net money put in since the first day shown
  *                   (the page carries a copy of this function; test/dashboard.networth.test.ts holds them equal)
+ *   changeOver      the Yahoo-style change chips (1D 1W 1M YTD 1Y 3Y 5Y All): newest point against the point where
+ *                   the range starts, in money and %; rebase: a line as % from a base (the graph's % mode). The page
+ *                   carries a copy of rangeFrom / rangeStartIndex / changeOver / rebase (change-math markers; the
+ *                   test holds them equal)
+ *   (estimate.ts)   the estimated past of the market groups from the long price history (growth.estimate)
  *   subTypeTotals   the market part by the owner's own sub-types (as written in the ledger / Portfolio tab; by kind
  *                   when none): the allocation pie
  *   ratioCards      each target of ledger/targets.json ("A/B", "A bag/B": a price or a holding's whole value over a
@@ -31,9 +36,10 @@ import { orElse } from '../core/guard.ts';
 import {
   LEDGER_SCHEMA, LEDGER_FILES, LEDGER_GROUPS, groupOfStock,
   type Currency, type LedgerGroup, type LedgerHoldings, type LedgerAssets, type LedgerWatchlist, type LedgerFlow, type LedgerSnapshot,
-  type LedgerStock, type LedgerOption, type LedgerAsset, type LedgerTargets, type LedgerPrices,
+  type LedgerStock, type LedgerOption, type LedgerAsset, type LedgerTargets, type LedgerPrices, type LedgerEdit, type LedgerJournalEntry,
 } from './schema.ts';
 import { lotChecks } from './lots.ts';
+import type { GrowthEstimate } from './estimate.ts';
 
 /** A static value older than this many days is shown amber ("update it"). */
 export const STALE_DAYS = 90;
@@ -53,6 +59,9 @@ export interface LedgerSources {
   readonly targets?: LedgerTargets | null;
   /** ledger/prices.json (additive 2026-11-06): the Nightly's prices by holding id. */
   readonly prices?: LedgerPrices | null;
+  /** ledger/edits.jsonl and ledger/journal.jsonl (additive 2026-11-08): the advice journal's "acted?" and its lines. */
+  readonly edits?: readonly LedgerEdit[] | null;
+  readonly journal?: readonly LedgerJournalEntry[] | null;
 }
 
 /** ledger/targets.json (schema.ts LedgerTargets): names "A/B" or "A bag/B" become ratio cards. */
@@ -187,6 +196,11 @@ export interface Growth {
   readonly flows: readonly GrowthFlow[];
   /** The day the graph starts (the first snapshot, else the ledger's day). */
   readonly start: string | null;
+  /**
+   * Additive 2026-11-07: the estimated past before the first snapshot (ledger/estimate.ts; today's holdings x each
+   * day's close, today's USD/ILS). Absent when there is no price history or no holding to price.
+   */
+  readonly estimate?: GrowthEstimate;
 }
 
 // ── small helpers ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -276,6 +290,7 @@ export function readLedgerSources(dir: string, log: Logger | null | undefined): 
     holdings: json<LedgerHoldings>(LEDGER_FILES.holdings), assets: json<LedgerAssets>(LEDGER_FILES.assets), watchlist: json<LedgerWatchlist>(LEDGER_FILES.watchlist),
     flows: lines<LedgerFlow>(LEDGER_FILES.flows), snapshots: lines<LedgerSnapshot>(LEDGER_FILES.snapshots), targets: json<LedgerTargets>(TARGETS_FILE),
     prices: json<LedgerPrices>(LEDGER_FILES.prices),
+    edits: lines<LedgerEdit>(LEDGER_FILES.edits), journal: lines<LedgerJournalEntry>(LEDGER_FILES.journal),
   };
 }
 
@@ -483,8 +498,8 @@ export function buildNetWorth(input: NetWorthInput): NetWorth | null {
 
 // ── the growth graph ──────────────────────────────────────────────────────────────────────────────────────────────
 
-export function buildGrowth(ledger: LedgerSources): Growth | null {
-  if (!ledger.snapshots && !ledger.flows) return null;
+export function buildGrowth(ledger: LedgerSources, estimate?: GrowthEstimate | null): Growth | null {
+  if (!ledger.snapshots && !ledger.flows && !estimate) return null;
   const snaps = latestSnapshots(ledger.snapshots ?? []);
   const snapshots: GrowthSnapshot[] = snaps.map((s) => {
     const usd: Partial<Record<LedgerGroup, number>> = {};
@@ -501,7 +516,7 @@ export function buildGrowth(ledger: LedgerSources): Growth | null {
       return { id: f.id, date: f.date, group: f.group, itemId: typeof f.itemId === 'string' ? f.itemId : null, amount: r2(f.amount) as number, currency, usd, ils, note: typeof f.note === 'string' ? f.note.slice(0, 300) : null, source: f.source, suggested: f.source === 'suggested' };
     });
   const updated = [ledger.holdings?.updated, ledger.assets?.updated].filter(isDay).sort();
-  return { snapshots, flows, start: snapshots[0]?.date ?? updated[0] ?? null };
+  return { snapshots, flows, start: snapshots[0]?.date ?? updated[0] ?? null, ...(estimate ? { estimate } : {}) };
 }
 
 /**
@@ -524,4 +539,57 @@ export function withoutFlows(days: readonly string[], values: readonly (number |
     out.push(v == null || !Number.isFinite(v) ? null : Math.round((v - cum) * 100) / 100);
   }
   return out;
+}
+
+// ── change chips and % lines (the page carries a copy between its change-math markers) ───────────────────────────
+
+/** The change chips. */
+export const CHANGE_RANGES: readonly string[] = ['1D', '1W', '1M', 'YTD', '1Y', '3Y', '5Y', 'All'];
+/** The day a range starts, counted back from `last` ('YYYY-MM-DD'); null for 1D (the previous point) and All (the first). */
+export function rangeFrom(last: string, key: string): string | null {
+  const back = (k: number): string => new Date(Date.parse(last + 'T12:00:00Z') - k * 86400000).toISOString().slice(0, 10);
+  const yrs = (k: number): string => (Number(last.slice(0, 4)) - k) + last.slice(4);
+  if (key === '1W') return back(7);
+  if (key === '1M') return back(30);
+  if (key === '3M') return back(91);
+  if (key === 'YTD') return (Number(last.slice(0, 4)) - 1) + '-12-31';
+  if (key === '1Y') return yrs(1);
+  if (key === '3Y') return yrs(3);
+  if (key === '5Y') return yrs(5);
+  return null;
+}
+/**
+ * The point a range starts at: 1D the previous point, All the first, else the last point on or before rangeFrom (the
+ * first point when the range starts before the data). `days` ascending; -1 when there are fewer than 2 points.
+ */
+export function rangeStartIndex(days: readonly string[], key: string): number {
+  const n = days.length;
+  if (n < 2) return -1;
+  if (key === '1D') return n - 2;
+  const from = rangeFrom(days[n - 1] as string, key);
+  if (from == null) return 0;
+  let i = 0;
+  for (let k = 0; k < n - 1; k++) if ((days[k] as string) <= from) i = k;
+  return i;
+}
+/**
+ * The change over a range: the newest value minus the value at the range's start point, and that as % of the start
+ * value's size (null when the start is 0). Points with no value are skipped (the first valued point from the start,
+ * the last valued point). null when there are not two valued points.
+ */
+export function changeOver(days: readonly string[], values: readonly (number | null)[], key: string): { i: number; j: number; abs: number; pct: number | null } | null {
+  let i = rangeStartIndex(days, key);
+  if (i < 0) return null;
+  const ok = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v);
+  let j = values.length - 1;
+  while (j >= 0 && !ok(values[j])) j--;
+  while (i < j && !ok(values[i])) i++;
+  if (j < 0 || i >= j) return null;
+  const a = values[i] as number, b = values[j] as number;
+  return { i, j, abs: Math.round((b - a) * 100) / 100, pct: a === 0 ? null : Math.round((b - a) / Math.abs(a) * 10000) / 100 };
+}
+/** A line as % change from `base` (the graph's % mode); null where there is no value or the base is 0 / missing. */
+export function rebase(values: readonly (number | null)[], base: number | null): (number | null)[] {
+  const ok = typeof base === 'number' && Number.isFinite(base) && base !== 0;
+  return values.map((v) => (!ok || v == null || !Number.isFinite(v) ? null : Math.round((v - (base as number)) / Math.abs(base as number) * 10000) / 100));
 }

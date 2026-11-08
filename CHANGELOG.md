@@ -10,6 +10,25 @@ The shared core's releases. Version numbers are MAJOR.MINOR.PATCH (the `VERSION`
 
 Each release: a section `## vX.Y.Z (date)` with Added / Changed / Fixed / Action needed (MAJOR only).
 
+## v2.2.0 (2026-11-08)
+
+MINOR: new optional features and fixes. Nothing to do.
+
+### Added
+
+- The Advice Journal (ledger/journal.jsonl): every piece of advice (Exit and Buy reports, alerts, Claude) logged once
+  when it appears or changes; "acted?" from the ledger and "right?" vs QQQ at 1w/1m/3m/1y; a Journal tab in the app;
+  `npm run journal-add` for advice given in chat.
+- Dashboard: $ / ₪ / % switch, change chips (1D … All), the growth graph's estimated history from 2020 (dated lots,
+  closed positions), dated purchase lots in a holding's sheet; Chart.js is self-hosted (no CDN).
+
+### Fixed
+
+- Dashboard: the service worker blocked the chart library (CSP connect-src); one failing section no longer blanks
+  the others; lots readable on phones; ledger buy dates and sales shown in Portfolio and History.
+- Ledger trial: holdings compare by quantity; corrected costs and real buy dates are an INFO line, not a difference.
+- Watchdog: no duplicate Run Health rows when it runs twice a day.
+
 ## v2.1.0 (2026-11-07)
 
 MINOR: new optional features, all off by default. Nothing to do.
