@@ -18,7 +18,7 @@
 import type { PortfolioResult } from '../sheets/readers/portfolio.ts';
 import type { LedgerMode } from '../profile/schema.ts';
 import { appendSnapshot, readLedgerJson, writeLedgerJson } from './store.ts';
-import { compareHoldings, toPortfolio } from './toPortfolio.ts';
+import { compareHoldings, ledgerRefinements, toPortfolio } from './toPortfolio.ts';
 import { buildSnapshot } from './snapshot.ts';
 import { LEDGER_FILES, LEDGER_SCHEMA, type LedgerHoldings } from './schema.ts';
 import { cryptoPriceSymbol } from './cryptoPrices.ts';
@@ -61,6 +61,8 @@ export async function runLedgerNight(d: LedgerNightDeps): Promise<LedgerNightRes
     const counts = d.sheetPortfolio.stocks.length + ' stock(s), ' + d.sheetPortfolio.options.length + ' option(s), ' + d.sheetPortfolio.skippedCrypto.length + ' crypto';
     if (!differences.length) d.info('ledger shadow: the ledger holds the same holdings as the sheet (' + counts + ')');
     else d.warn('ledger shadow: ' + differences.length + ' difference(s) between the sheet and the ledger: ' + differences.join(' | '));
+    const refined = ledgerRefinements(d.sheetPortfolio, toPortfolio(held));
+    if (refined.length) d.info('ledger shadow: ' + refined.length + ' holding(s) with a corrected cost or a real buy date in the ledger (from the statements; not a difference): ' + refined.join(' | '));
   }
   const priced = d.cryptoPrices === 'on' && d.fetchCrypto ? await withCryptoPrices(held, d.fetchCrypto, d.close, d.info) : null;
   const holdings = priced?.holdings ?? held;

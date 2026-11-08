@@ -17,6 +17,11 @@
  *   ledger/* (data branch) the net worth screen and the growth graph (ledger/networth.ts), when the `data` branch is
  *                          checked out (DATA_BRANCH_DIR, default <repo>/data-branch); absent: `networth` and `growth`
  *                          are left out (named in `missing`)
+ *   long price history     (the `prices` branch, storage/longHistory.ts) the growth graph's ESTIMATED past before the
+ *                          first snapshot (ledger/estimate.ts): today's holdings x each day's close; absent: no estimate
+ *   ledger/journal.jsonl   the advice journal (ledger/journal.ts buildJournal): every advice with acted? (edits.jsonl,
+ *                          holdings.json) and right? (the long price history + tonight's closes) per horizon, and the
+ *                          scorecard per source; absent / empty: `journal` is left out (named in `missing`)
  *
  * The structured rows the pipelines write are preferred; a report tab is read only through its fixed table header
  * (reports/exitSheet/text.ts tocColumns, reports/buySheet/text.ts rankingColumns), never through free text.
@@ -46,7 +51,11 @@ import { TRANSACTIONS_SHEET, TRANSACTIONS_HEADERS } from '../portfolio/transacti
 import { RUN_HEALTH_TAB, RUN_HEALTH_HEADER } from '../watchdog.ts';
 import { FREE_MINUTES } from '../reports/digest/actionsMinutes.ts';
 import { CLAUDE_IDEAS_TAB, CLAUDE_IDEAS_HEADER, parseIdeaZone, ideaStatusOf } from '../paper/claudeIdeas.ts';
-import { buildNetWorth, buildGrowth, type LedgerSources, type NetWorth, type Growth } from '../ledger/networth.ts';
+import { buildNetWorth, buildGrowth, nyDay, latestSnapshots, type LedgerSources, type NetWorth, type Growth } from '../ledger/networth.ts';
+import { buildEstimate, STATIC_GROUP_IDS, type PriceSeries, type StaticGroup } from '../ledger/estimate.ts';
+import { boughtOf } from '../ledger/lots.ts';
+import type { LedgerStock, LedgerClosed } from '../ledger/schema.ts';
+import { buildJournal, type DashJournal, type JournalSeries } from '../ledger/journal.ts';
 
 /** Bump when a field changes meaning or is removed (the app checks it); adding a field keeps the number. */
 export const DASHBOARD_SCHEMA = 1;
@@ -77,6 +86,10 @@ export interface DashboardSources {
   readonly claudeIdeas?: Grid | null;
   /** The ledger files of the `data` branch (ledger/networth.ts readLedgerSources); null / absent = not checked out. */
   readonly ledger?: LedgerSources | null;
+  /** Daily closes by series key (ticker, or "<symbol>-USD" for a coin) from the long price history; absent = no estimate. */
+  readonly priceHistory?: ReadonlyMap<string, PriceSeries> | null;
+  /** Daily closes for the advice journal (its tickers and QQQ) from the long price history; absent = scored as "no data". */
+  readonly journalPrices?: ReadonlyMap<string, JournalSeries> | null;
 }
 
 export interface DashboardContext {
@@ -100,6 +113,29 @@ export interface DashboardContext {
 
 export type HoldingKind = 'stock' | 'etf' | 'btc' | 'crypto' | 'call' | 'put';
 export type HoldingGroup = 'stocks' | 'btc' | 'crypto' | 'calls';
+
+const LEDGER_KIND: Readonly<Record<string, LedgerStock['kind']>> = { stocks: 'stock', btc: 'btcFund', crypto: 'crypto' };
+/**
+ * Fix 2026-11-07 (real-data QA): the Portfolio sheet has no purchase date for most stocks, so a holding's sheet said
+ * "Bought —" while the ledger (net worth screen) knows the day (its `bought`, else its earliest dated lot). A holding
+ * without a sheet date takes the ledger's, matched by ticker and kind (the BTC fund and the BTC coin stay apart).
+ * Calls keep the sheet's own date. Display only: nothing the runs read changes.
+ */
+export function withLedgerBought(holdings: readonly DashHolding[], stocks: readonly LedgerStock[] | null | undefined): DashHolding[] {
+  if (!stocks || !stocks.length) return holdings.slice();
+  const day = new Map<string, string>();
+  for (const st of stocks) {
+    if (!st || typeof st.ticker !== 'string') continue;
+    const d = boughtOf(st), k = st.kind + ':' + st.ticker.toUpperCase();
+    if (d && /^\d{4}-\d{2}-\d{2}$/.test(d) && (!day.has(k) || d < (day.get(k) as string))) day.set(k, d);
+  }
+  return holdings.map((h) => {
+    const kind = LEDGER_KIND[h.group];
+    if (h.entryDate || !kind) return h;
+    const d = day.get(kind + ':' + h.ticker.toUpperCase());
+    return d ? { ...h, entryDate: d } : h;
+  });
+}
 
 export interface DashHolding {
   readonly key: string;
@@ -163,7 +199,7 @@ export const WASHOUT_LINE = /^🟢 Washout: ([A-Z0-9.^=-]{1,12}) /;
 export interface DashHistoryItem {
   readonly date: string | null; readonly year: number | null; readonly ticker: string; readonly label: string; readonly kind: 'stock' | 'call' | 'put' | 'other';
   readonly qty: number | null; readonly cost: number | null; readonly proceeds: number | null; readonly gain: number | null; readonly gainPct: number | null;
-  readonly tax: number | null; readonly heldDays: number | null; readonly source: 'portfolio-closed' | 'transactions';
+  readonly tax: number | null; readonly heldDays: number | null; readonly source: 'portfolio-closed' | 'transactions' | 'ledger';
 }
 
 export interface DashPaperAccount {
@@ -219,6 +255,8 @@ export interface DashboardData {
   readonly networth?: NetWorth;
   /** The growth graph: one snapshot per day and the money in / out marks. */
   readonly growth?: Growth;
+  /** The advice journal (additive 2026-11-08): every advice, acted? and right? per horizon, the scorecard per source. */
+  readonly journal?: DashJournal;
   /** Sections left out (their tab missing or unreadable). */
   readonly missing: readonly string[];
 }
@@ -568,6 +606,32 @@ function historyItem(x: { date: string | null; ticker: string; label: string; ki
   };
 }
 
+/**
+ * Fix 2026-11-07 (real-data QA): the ledger's closed positions (holdings.json `closed`, the net worth screen) were not
+ * in History, which read only the Portfolio tab's CLOSED block and 📒 Transactions (1 of 9 sales showed). Each USD
+ * ledger sale that neither of those already lists (same ticker, stock-or-option, same sell day) is added. History is in
+ * dollars, so a sale in another currency is left out. Display only.
+ */
+export function ledgerClosedHistory(closed: readonly LedgerClosed[] | null | undefined, rate: number, have: readonly DashHistoryItem[]): DashHistoryItem[] {
+  if (!closed || !closed.length) return [];
+  const opt = (k: string): boolean => k === 'call' || k === 'put';
+  const seen = new Set(have.map((h) => h.ticker.toUpperCase() + '|' + opt(h.kind) + '|' + (h.date ?? '')));
+  const out: DashHistoryItem[] = [];
+  for (const c of closed) {
+    if (!c || typeof c.ticker !== 'string' || c.currency !== 'USD') continue;
+    const date = typeof c.sold === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(c.sold) ? c.sold : null;
+    const ticker = c.ticker.toUpperCase(), key = ticker + '|' + opt(c.kind) + '|' + (date ?? '');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const bought = typeof c.bought === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(c.bought) ? c.bought : null;
+    const label = opt(c.kind) ? ticker + ' ' + (c.strike ?? '?') + (c.kind === 'put' ? 'P' : 'C') + (c.expiry ? ' ' + c.expiry : '') : ticker;
+    const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    out.push(historyItem({ date, ticker, label, kind: opt(c.kind) ? (c.kind as 'call' | 'put') : c.kind === 'crypto' ? 'other' : 'stock', qty: num(c.qty), cost: num(c.cost), proceeds: num(c.proceeds),
+      heldDays: bought && date ? daysBetween(bought, date) : null, source: 'ledger' }, rate));
+  }
+  return out;
+}
+
 /** Sales in 📒 Transactions, matched first-in first-out against earlier buys of the same holding. */
 export function parseTransactions(grid: Grid | null | undefined, rate: number): DashHistoryItem[] {
   const rows = rowsOf(grid), c = columnsOf(rows, TRANSACTIONS_HEADERS);
@@ -770,7 +834,7 @@ export function buildDashboard(src: DashboardSources, ctx: DashboardContext): Da
   const targets = orElse(log, 'dashboard exit targets', () => latestTargets(src.exitTargets), new Map());
 
   const portfolio = section('portfolio', !!src.portfolio, () => {
-    const holdings = parseHoldings(src.portfolio, ctx, prices, exitItems, targets);
+    const holdings = withLedgerBought(parseHoldings(src.portfolio, ctx, prices, exitItems, targets), src.ledger?.holdings?.stocks);
     if (!holdings.length) return null;
     const sum = (k: 'value' | 'cost' | 'gain'): number => r2(holdings.reduce((a, h) => a + (h[k] ?? 0), 0)) as number;
     const gain = sum('gain'), tax = r2(holdings.reduce((a, h) => a + (h.tax ?? 0), 0)) as number;
@@ -787,8 +851,9 @@ export function buildDashboard(src: DashboardSources, ctx: DashboardContext): Da
     return { asOf: run?.day ?? targetsDay, runTime: run?.text ?? null, targetsDay, items: exitItems, counts };
   });
   const buy = section('buy', !!src.buyReport, () => { const items = parseBuyReport(src.buyReport, prices); return items.length ? { runTime: reportRunTime(src.buyReport, BUY_TEXT.runLabel)?.text ?? null, items } : null; });
-  const history = section('history', !!(src.portfolio || src.transactions), () => {
-    const items = [...parseClosed(src.portfolio, ctx.taxRate), ...parseTransactions(src.transactions, ctx.taxRate)].sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''));
+  const history = section('history', !!(src.portfolio || src.transactions || src.ledger?.holdings?.closed?.length), () => {
+    const sheet = [...parseClosed(src.portfolio, ctx.taxRate), ...parseTransactions(src.transactions, ctx.taxRate)];
+    const items = [...sheet, ...ledgerClosedHistory(src.ledger?.holdings?.closed, ctx.taxRate, sheet)].sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''));
     return { items, years: historyYears(items, ctx.taxRate) };
   });
   const paper = section('paper', !!src.paperValues, () => buildPaper(parseValues(src.paperValues ?? []), parseLog(src.paperLog ?? []), ctx.paper ?? null));
@@ -801,7 +866,19 @@ export function buildDashboard(src: DashboardSources, ctx: DashboardContext): Da
     : runItems ? { used: runHealthMinutes(runItems, ctx.nowMs), cap: FREE_MINUTES, source: 'run-health' as const } : undefined;
   const networth = section('networth', !!(src.ledger && (src.ledger.holdings || src.ledger.assets)), () =>
     buildNetWorth({ ledger: src.ledger as LedgerSources, live: portfolio?.holdings ?? [], nowMs: ctx.nowMs, fx: ctx.fxUsdIls ?? null, prices }));
-  const growth = section('growth', !!(src.ledger && (src.ledger.snapshots || src.ledger.flows)), () => buildGrowth(src.ledger as LedgerSources));
+  const estimate = src.ledger?.holdings && src.priceHistory && src.priceHistory.size ? orElse(log, 'dashboard growth estimate', () => {
+    const L = src.ledger as LedgerSources;
+    const firstReal = latestSnapshots(L.snapshots ?? [])[0]?.date ?? null;
+    const staticUsd: Partial<Record<StaticGroup, number>> = {};
+    for (const g of STATIC_GROUP_IDS) { const v = networth?.groups.find((x) => x.id === g)?.usd; if (v != null) staticUsd[g] = v; }
+    return buildEstimate({ holdings: L.holdings as NonNullable<LedgerSources['holdings']>, series: src.priceHistory as ReadonlyMap<string, PriceSeries>, fx: networth?.fx?.usdIls ?? null, today: nyDay(ctx.nowMs), firstReal, staticUsd,
+      todayUsd: new Map((networth?.items ?? []).filter((x) => x.usd != null).map((x) => [x.id, x.usd as number])) });
+  }, null) : null;
+  const growth = section('growth', !!(src.ledger && (src.ledger.snapshots || src.ledger.flows || estimate)), () => buildGrowth(src.ledger as LedgerSources, estimate));
+  const journal = section('journal', !!(src.ledger && src.ledger.journal && src.ledger.journal.length), () => {
+    const L = src.ledger as LedgerSources;
+    return buildJournal({ entries: L.journal ?? [], holdings: L.holdings ?? null, edits: L.edits ?? null, series: src.journalPrices ?? new Map(), latest: prices, today: nyDay(ctx.nowMs) });
+  });
   const market = options?.market.length
     ? [...options.market.map((m) => ({ name: m.etf, value: m.spot })), ...(options.market[0]?.vix != null ? [{ name: 'VIX', value: options.market[0].vix }] : []), ...options.market.filter((m) => m.pcOi != null).slice(0, 1).map((m) => ({ name: m.etf + ' P/C', value: m.pcOi }))]
     : undefined;
@@ -811,7 +888,7 @@ export function buildDashboard(src: DashboardSources, ctx: DashboardContext): Da
     user: { labels: { list: ctx.labels.list, holdCore: ctx.labels.holdCore, holdList: ctx.labels.holdList, qqq: QQQ_ROW }, taxRate: ctx.taxRate, list: [...ctx.list], timeZone: ctx.timeZone },
     ...(portfolio ? { portfolio } : {}), ...(exit ? { exit } : {}), ...(buy ? { buy } : {}), ...(history ? { history } : {}), ...(paper ? { paper } : {}), ...(ideas ? { ideas } : {}),
     ...(options ? { options } : {}), ...(models ? { models } : {}), ...(decisions ? { decisions } : {}), ...(runItems ? { runs: { items: runItems } } : {}),
-    ...(minutes ? { minutes } : {}), ...(market ? { market } : {}), ...(networth ? { networth } : {}), ...(growth ? { growth } : {}), missing,
+    ...(minutes ? { minutes } : {}), ...(market ? { market } : {}), ...(networth ? { networth } : {}), ...(growth ? { growth } : {}), ...(journal ? { journal } : {}), missing,
   };
 }
 

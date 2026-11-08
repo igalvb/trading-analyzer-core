@@ -42,6 +42,7 @@ import { fetchYahooChartRaw } from './fetch/yahoo.ts';
 import { dataBranchDir } from './ledger/store.ts';
 import { runLedgerNight, type LedgerNightDeps } from './ledger/night.ts';
 import { fetchCryptoPrices } from './ledger/cryptoPrices.ts';
+import { runJournalNight, type JournalNightDeps } from './ledger/journalNight.ts';
 import { sendWashoutAlerts } from './jobs/washout/washoutAlert.ts';
 import { notifyIfNeeded, type TelegramTarget } from './notify/policy.ts';
 import type { PropertyStore } from './storage/kv.ts';
@@ -89,6 +90,8 @@ export async function nightlyMain(argv: readonly string[], io: CliIo = STD_IO, o
   if (built && activeProfile().storage.ledger !== 'off') {
     const app: NightlyApp = built;
     await orElseAsync(s.ctx.log, 'ledger night', () => runLedgerNight(ledgerNightDeps(s, app)), null);
+    // The advice journal (ledger/journal.ts): tonight's new or changed advice, appended next to the snapshot.
+    await orElseAsync(s.ctx.log, 'advice journal', () => runJournalNight(journalNightDeps(s, app)), null);
   }
   // F-B7-1: the Sheets quota (about 50 calls a minute) is what sets the run time; log the count every run.
   if (s.sheets) s.ctx.log.info('Sheets API calls this run: ' + [s.sheets, s.reportsSheets, s.dataSheets].reduce((n, c) => n + (c ? c.callCount() : 0), 0));
@@ -122,6 +125,18 @@ export function ledgerNightDeps(s: Services, app: Pick<NightlyApp, 'portfolio'>)
       fetch: async (url, timeoutMs) => { const r = await s.http.fetch({ url, muteHttpExceptions: true, timeoutMs }); return { status: r.status, text: r.text() }; },
       log: { warn: (m) => s.ctx.log.warning(m) },
     }),
+    info: (m) => s.ctx.log.info(m), warn: (m) => s.ctx.log.warning(m),
+  };
+}
+
+/** The advice journal's inputs: the report tabs just written, tonight's closes (cached charts), the alerts of the night. */
+export function journalNightDeps(s: Services, app: Pick<NightlyApp, 'washout' | 'eventCheck' | 'business'>): JournalNightDeps {
+  const lastOf = (c: { readonly closes: readonly number[] } | null | undefined): number | null => (c && c.closes.length ? (c.closes[c.closes.length - 1] ?? null) : null);
+  return {
+    mode: activeProfile().storage.ledger, root: dataBranchDir(s.env), today: formatDateInTz(new Date(s.clock.now()), 'America/New_York'), nowIso: new Date(s.clock.now()).toISOString(),
+    readTab: (tab, cols) => s.tabStore.read(tab, cols),
+    close: async (t) => lastOf(await s.fetchChart(t)),
+    washout: () => app.washout(), eventCheck: () => app.eventCheck(), business: () => (app.business ? app.business() : null),
     info: (m) => s.ctx.log.info(m), warn: (m) => s.ctx.log.warning(m),
   };
 }

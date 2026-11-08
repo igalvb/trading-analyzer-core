@@ -19,12 +19,21 @@ One shared format for the migration, the runs, the dashboard and the dashboard's
 | `ledger/flows.jsonl` | LedgerFlow | money in / out, one JSON object per line, append-only |
 | `ledger/snapshots.jsonl` | LedgerSnapshot | one line per day: value per group in USD, total USD / ILS, the USD/ILS rate |
 | `ledger/edits.jsonl` | LedgerEdit | every dashboard edit (audit trail), append-only |
+| `ledger/journal.jsonl` | LedgerJournalEntry | optional: the advice journal, every advice given, append-only (below) |
 
 Rules (backend/src/ledger/store.ts): JSON files are pretty-printed and written whole; JSONL files are append-only
 (a line is never rewritten; a snapshot day already saved is kept). Every file and every line carries `schema`; a reader
 refuses a newer schema and a broken file with one plain line naming the file. Money has a `currency` per item;
 dates are `YYYY-MM-DD`. Additive fields (2026-11-06): `LedgerAsset.person` (whose item), `LedgerAsset.savingsType`
 (the sheet's own word for it).
+
+### The estimated past (dashboard only, additive 2026-11-07)
+
+The growth graph's history before the first snapshot is not stored: each dashboard build estimates it from
+`holdings.json` and the long price history (`backend/src/ledger/estimate.ts`, docs/DASHBOARD.md "Estimated history").
+So the dates you keep in the ledger matter: a lot's `date`, a holding's `bought`, an option's `bought`, a closed
+position's `bought` and `sold` place them in time; with no date a holding counts as held since 2020. Nothing here is
+written to the ledger, and nothing a run decides reads it.
 
 ### Dated purchase lots (additive 2026-11-07)
 
@@ -39,6 +48,43 @@ holding, as the broker shows them. After a split, the post-split numbers, the ol
 | `bought` | absent / null = the earliest dated lot (`boughtOf`; the dashboard's "Bought") |
 | The runs | unchanged: toPortfolio.ts reads `qty`, `avgCost` and `bought` only, so lots never move a verdict, a score or the shadow comparison |
 | Edits | dashboard `kind: 'lot'` (add / remove), one commit + a LedgerEdit line (docs/DASHBOARD.md); a change keeps the lots; a sale shrinks the lots that no longer fit, earliest first |
+
+### The advice journal (additive 2026-11-08)
+
+`ledger/journal.jsonl` (LedgerJournalEntry, backend/src/ledger/journal.ts): every piece of advice the system and Claude
+give, one line each, append-only, so that a year later we can learn whether it was followed and whether it was right.
+Display and record only: no buy / sell rule, score or verdict reads it.
+
+| Field | |
+|---|---|
+| `id` | `date:source:subject:advice` (subject = an option's holding label, else the ticker, else `MARKET`); a second line with the same id is never written |
+| `date` | the New York day of the advice |
+| `source` | `exit` · `buy` · `washout` · `marketShock` · `business` · `eventCheck` · `claudeIdea` · `claudeChat` · `top5` |
+| `ticker` | null = the whole market |
+| `advice` | `BUY` · `ADD` · `HOLD` · `REVIEW` · `EXIT` · `WAIT` · `AVOID` · `BUY_POINT` · `ALERT` |
+| `detail`, `horizon` | the short reason and the horizon named, as given |
+| `priceAtAdvice`, `qqqAtAdvice` | the prices then (an option: its stock); null = the history's close that day |
+| `refs` | where it came from (holding label, entry zone, an alert's signature `sig`, a note) |
+
+Who writes it:
+
+| Writer | When | What |
+|---|---|---|
+| The Nightly (`ledger/journalNight.ts`) | after the snapshot, only while `storage.ledger` is `shadow` or `on`; never fails the night | Exit report EXIT / REVIEW (TRIM = EXIT, TARGET HIT = REVIEW; HOLD only right after an EXIT / REVIEW), Buy report verdicts (BUY NOW = BUY, or ADD when held; SET A BUY LIMIT = BUY_POINT; WAIT; AVOID), each washout hit (ADD when held, else BUY_POINT), the market shock (BUY_POINT for the market), each business alert with a trigger (ALERT), the event check (ALERT), the 🤖 Claude Ideas rows (SELL = EXIT) |
+| Claude | after a chat | `npm run journal-add -- <source> <TICKER or -> <ADVICE> "<detail>" [--date YYYY-MM-DD] [--price N] [--qqq N] [--horizon "<text>"] [--note "<text>"]`, into a checked-out data branch folder (`DATA_BRANCH_DIR`); then commit and push to `data` |
+
+Dedupe: a report row (exit, buy) is written when its advice first appears or changes; an alert when the same subject has
+no line with the same signature within 14 days. The Nightly's ledger job commits the file with the snapshot and merges
+it line by line (lines already on the branch are kept, tonight's new ones are added), so a chat line pushed during the
+night is never lost.
+
+Computed by the dashboard at each build, never stored (docs/DASHBOARD.md "Advice journal"):
+
+| | Rule |
+|---|---|
+| Acted? | the owner's trades of that ticker in the ledger (dated lots, buy days, closed positions, `edits.jsonl`: a new holding or a quantity up = a buy, a quantity down / a removed holding = a sale) within 5 trading days (weekdays) after the advice; a chat or idea counts its own day. BUY / ADD / BUY_POINT: bought = followed, sold = opposite; EXIT: sold = followed; HOLD / WAIT / AVOID: no trade = followed; REVIEW / ALERT: traded or not |
+| Right? | the stock's return vs QQQ's over the same window at +1 week, +1 month, +3 months, +1 year (the long price history plus tonight's closes). BUY / ADD / BUY_POINT right if the stock beat QQQ (the market's BUY_POINT: if QQQ rose); EXIT / AVOID right if it trailed QQQ; HOLD right if it did not trail QQQ by more than 5 points; REVIEW / ALERT / WAIT information only; pending until the horizon has passed |
+| $ value | $5,000 per advice (the owner's rule of thumb per buy): following a BUY = $5k in the stock instead of QQQ, following an EXIT = $5k moved from the stock into QQQ; "what you did" counts it when followed, minus it when the opposite was done. Before tax and fees |
 
 The runs find the branch's folder through `DATA_BRANCH_DIR` (default `../data-branch` from `backend/`, which is where
 the Nightly checks the branch out).

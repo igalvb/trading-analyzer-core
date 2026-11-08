@@ -23,6 +23,7 @@ export const LEDGER = {
   files: {
     holdings: 'ledger/holdings.json', assets: 'ledger/assets.json', watchlist: 'ledger/watchlist.json',
     flows: 'ledger/flows.jsonl', snapshots: 'ledger/snapshots.jsonl', edits: 'ledger/edits.jsonl', targets: 'ledger/targets.json', prices: 'ledger/prices.json',
+    journal: 'ledger/journal.jsonl',
   },
   groups: ['stocks', 'btcFunds', 'crypto', 'calls', 'pension', 'funds', 'realEstate', 'cash'],
   editKinds: ['add', 'change', 'remove', 'sell', 'flow', 'watchlist', 'lot'],

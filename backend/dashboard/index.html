@@ -16,7 +16,8 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<!-- Chart.js 4.4.1 (MIT): npm chart.js@4.4.1 dist/chart.umd.js, served from this site (no third-party script: CSP script-src 'self'). -->
+<script src="vendor/chart.umd.min.js"></script>
 <!--
   The app shell of the phone dashboard (docs/DASHBOARD.md). Static: it is copied as it is by `npm run dashboard-build`
   and reads its data from ./data/dashboard.json (same origin; backend/src/dashboard/data.ts writes it). Every value
@@ -159,6 +160,8 @@ th[aria-sort="descending"]::after { content: ' ▼'; font-size: 9px; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th { text-align: left; font-weight: 500; font-size: 12px; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 td { padding: 9px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+tr:has(+ tr.lot-note) td { border-bottom: 0; padding-bottom: 2px; }
+tr.lot-note td { white-space: normal; overflow-wrap: anywhere; padding-top: 0; }
 #pfTable th, #pfTable td { padding-left: 7px; padding-right: 7px; }
 #paperTable td:first-child { white-space: normal; min-width: 200px; overflow-wrap: anywhere; }
 #paperTable th, #paperTable td { padding-left: 8px; padding-right: 8px; }
@@ -342,6 +345,18 @@ tr.tot td { font-weight: 600; background: color-mix(in srgb, var(--muted) 7%, tr
 .ratio:first-child { border-top: 0; }
 .ratio .bar { margin-top: 6px; height: 8px; }
 .fbar { display: flex; gap: 8px; align-items: center; margin: 0 0 8px; font-size: 13px; }
+.rchips { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+@media (min-width: 600px) { .rchips { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
+.rchip { border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 6px 4px; text-align: center; min-width: 0; font-size: 12px; line-height: 1.3; }
+.rchip b { display: block; font-size: 11px; color: var(--muted); font-weight: 600; }
+.rchip .num { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rchip .est { display: block; font-size: 10px; color: var(--muted); font-weight: 400; }
+.rchip[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.rchips.mini { margin: 2px 0 8px 18px; gap: 4px; }
+.rchips.mini .rchip { padding: 4px 2px; font-size: 11px; }
+.kpi .chg { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 13px; margin-top: 2px; }
+.gchg { font-size: 12px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.est-note { border-left: 3px dashed var(--line); padding-left: 8px; }
 </style>
 </head>
 <body>
@@ -363,6 +378,7 @@ tr.tot td { font-weight: 600; background: color-mix(in srgb, var(--muted) 7%, tr
     <section class="view" id="view-networth" aria-labelledby="h-networth">
       <div class="view-head"><h2 id="h-networth">Net worth</h2><div class="nw-head"><div class="seg" role="group" aria-label="Currency" id="nwCur"></div><button class="btn sm" type="button" id="nwEdit">+ Add / edit</button></div></div>
       <div class="kpis" id="nwKpis"></div>
+      <div id="nwChips"></div>
       <div class="grid two" style="margin-top:12px">
         <div class="card">
           <div class="card-head"><h3>Everything you own</h3><span class="muted small" id="nwSub"></span></div>
@@ -479,6 +495,22 @@ tr.tot td { font-weight: 600; background: color-mix(in srgb, var(--muted) 7%, tr
       <div class="table-wrap card" style="padding:0"><table id="hiTable"></table></div>
     </section>
 
+    <section class="view" id="view-journal" aria-labelledby="h-journal">
+      <div class="view-head"><h2 id="h-journal">📓 Advice journal</h2><span class="muted small" id="jrSub"></span></div>
+      <div class="card" id="jrScoreCard">
+        <div class="card-head"><h3>Scorecard by source</h3><span class="muted small" id="jrScoreSub"></span></div>
+        <div class="filters" role="group" aria-label="Horizon" id="jrHz"></div>
+        <div class="scroll-x"><table id="jrScore"></table></div>
+        <p class="note" id="jrNote"></p>
+      </div>
+      <div class="card" style="margin-top:12px" id="jrChartCard">
+        <div class="card-head"><h3>Hit rate by horizon</h3><span class="muted small">right ÷ (right + wrong)</span></div>
+        <div class="chart-box"><canvas id="ch-journal" role="img" aria-label="Bar chart: hit rate per horizon by source (the scorecard table has every value)"></canvas></div>
+      </div>
+      <div class="filters" role="group" aria-label="Filter the journal" id="jrFilters" style="margin-top:12px"></div>
+      <div class="vgrid" id="jrList"></div>
+    </section>
+
     <section class="view" id="view-analyze" aria-labelledby="h-analyze">
       <div class="view-head"><h2 id="h-analyze">Analyze</h2></div>
       <form class="search" id="anForm" role="search">
@@ -589,7 +621,8 @@ const F = {
   pp: store.get('f-pp', { group: 'All', beat: 'All', week: false }),
   hi: store.get('f-hi', { year: 'All', type: 'All', gain: 'All', q: '' }),
   run: store.get('f-run', { status: 'All' }),
-  idea: store.get('f-idea', { idea: 'All', status: 'All' })
+  idea: store.get('f-idea', { idea: 'All', status: 'All' }),
+  jr: Object.assign({ source: 'All', advice: 'All', acted: 'All', right: 'All', hz: '1m', q: '', from: '', to: '' }, store.get('f-jr', {}))
 };
 const S = {
   pf: store.get('s-pf', { k: 'value', d: -1 }),
@@ -621,7 +654,7 @@ const NAV = [
   ['buy', 'Buy', 'M12 5v14M5 12h14'],
   ['paper', 'Paper', 'M6 3h9l4 4v14H6zM9 12h7M9 16h7']
 ];
-const MORE = [['history', 'History'], ['analyze', 'Analyze'], ['options', 'Options'], ['models', 'Models'], ['runs', 'Runs'], ['actions', 'Actions'], ['settings', 'Settings']];
+const MORE = [['history', 'History'], ['journal', 'Journal'], ['analyze', 'Analyze'], ['options', 'Options'], ['models', 'Models'], ['runs', 'Runs'], ['actions', 'Actions'], ['settings', 'Settings']];
 const VIEWS = NAV.map(n => n[0]).concat(MORE.map(m => m[0]), ['more']);
 let current = 'overview';
 function buildNav() {
@@ -739,11 +772,20 @@ function lineDs(label, data, color, opts) {
   const last = data.length - 1;
   return Object.assign({ label, data, borderColor: color, backgroundColor: color, borderWidth: 2, tension: 0.25, pointRadius: data.map((_, i) => i === last ? 3 : 0), pointHoverRadius: 4, pointBackgroundColor: color, pointBorderColor: tok('surface'), pointBorderWidth: 2 }, opts || {});
 }
+const CHART_MISSING = 'Chart library failed to load. Pull to refresh; the numbers on this screen are still right.';
+function chartNote(canvas, msg) { canvas.parentElement.innerHTML = '<div class="chart-fallback" style="text-align:center;padding:0 18px;line-height:1.5">' + esc(msg) + '</div>'; }
+/* One chart's failure never stops the rest of the page: no library -> a note; a drawing error -> a note + console. */
 function mkChart(id, canvas, cfg) {
-  destroyChart(id);
+  try { destroyChart(id); } catch (e) { delete charts[id]; }
   if (!canvas) return;
-  if (!window.Chart) { canvas.parentElement.innerHTML = '<div class="chart-fallback">Chart library not loaded</div>'; return; }
-  charts[id] = new Chart(canvas, cfg);
+  if (typeof window.Chart !== 'function') { chartNote(canvas, CHART_MISSING); return; }
+  try { charts[id] = new Chart(canvas, cfg); }
+  catch (err) { console.error('chart ' + id + ' not drawn:', err); try { const c = Chart.getChart(canvas); if (c) c.destroy(); } catch (e) { /* already gone */ } delete charts[id]; chartNote(canvas, 'This chart could not be drawn.'); }
+}
+/* Runs one renderer; an error in it is logged and shown in its own place, never thrown into the next one. */
+function safely(name, fn, where) {
+  try { return fn(); }
+  catch (err) { console.error('dashboard: ' + name + ' failed:', err); const el = where && $(where); if (el) el.insertAdjacentHTML('beforeend', '<div class="chart-fallback" style="height:auto;padding:12px;margin-top:8px">This part could not be shown (' + esc(name) + ').</div>'); }
 }
 const kfmt = v => '$' + Math.round(v / 1000) + 'k';
 function paperChart(id, canvas) {
@@ -767,9 +809,10 @@ const RENDER = {
       options: { responsive: true, maintainAspectRatio: false, cutout: '68%', animation: reduceMotion ? false : { duration: 400 }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ' ' + c.label + ': ' + fmt$(c.parsed) } } } } });
   },
   paper() { paperChart('paper', $('#ch-paper')); },
+  journal() { journalChart(); },
   networth() { nwPies(); growthChart(); }
 };
-function renderCharts() { if (D) (RENDER[current] || (() => {}))(); }
+function renderCharts() { if (D && RENDER[current]) safely(current + ' charts', RENDER[current]); }
 function rerenderAllCharts() { renderCharts(); if (sheetChart) sheetChart(); }
 
 /* ---------- derived ---------- */
@@ -996,6 +1039,69 @@ function renderIdeas() {
     <div>${x.open ? chip('', 'open', 'info') : chip('', 'closed', 'neutral')}${x.outcome ? ` <span class="small muted">${esc(x.outcome)}</span>` : ''}</div></article>`).join('') : empty('No idea matches these filters.');
 }
 
+/* Advice journal (ledger/journal.jsonl: every advice, acted? and right? per horizon) */
+const JR_SOURCE = { exit: 'Exit report', buy: 'Buy report', washout: 'Washout', marketShock: 'Market shock', business: 'Business alert', eventCheck: 'Event check', claudeIdea: 'Claude idea', claudeChat: 'Claude chat', top5: 'Top 5', all: 'All sources' };
+const JR_ACTED = { followed: '✓ followed', opposite: '✗ did the opposite', 'no action': 'no action', waiting: '… window open', traded: 'traded', 'n/a': 'market' };
+const JR_VERDICT = { right: ['✓ right', 'good'], wrong: ['✗ wrong', 'bad'], info: ['info', 'info'], pending: ['pending', 'neutral'], 'no data': ['no data', 'neutral'] };
+const jrAdvice = a => chip(a, String(a).replace('_', ' '), a === 'BUY' || a === 'ADD' || a === 'BUY_POINT' || a === 'HOLD' ? 'good' : a === 'EXIT' ? 'bad' : a === 'REVIEW' || a === 'AVOID' || a === 'ALERT' ? 'warn' : 'neutral');
+const jrScore = (r, hz) => (r.scores || []).find(s => s.id === hz) || null;
+const jrMoney = v => isNum(v) ? `<span class="${cls(v)}">${fmt$(v)}</span>` : '—';
+function jrRows() {
+  const J = D.journal, f = F.jr, q = String(f.q || '').trim().toUpperCase();
+  return (J ? J.rows : []).map((r, i) => Object.assign({ i }, r)).filter(r => (f.source === 'All' || r.source === f.source) && (f.advice === 'All' || r.advice === f.advice) && (f.acted === 'All' || r.acted === f.acted)
+    && (f.right === 'All' || (jrScore(r, f.hz) || {}).status === f.right) && (!q || String(r.ticker || 'MARKET').includes(q) || String(r.subject).toUpperCase().includes(q)) && (!f.from || r.date >= f.from) && (!f.to || r.date <= f.to));
+}
+function renderJournal() {
+  const J = D.journal;
+  if (!J || !J.rows.length) { $('#jrSub').textContent = ''; $('#jrHz').innerHTML = ''; $('#jrScore').innerHTML = ''; $('#jrNote').textContent = ''; $('#jrFilters').innerHTML = ''; $('#jrList').innerHTML = empty('No advice logged yet. The Nightly adds the reports\' advice and alerts; Claude adds chat advice with npm run journal-add.'); return; }
+  if (!J.horizons.some(h => h.id === F.jr.hz)) F.jr.hz = J.horizons[0].id;
+  const hz = F.jr.hz, hl = (J.horizons.find(h => h.id === hz) || {}).label || hz;
+  $('#jrSub').textContent = J.rows.length + ' advice · as of ' + fmtDay(J.asOf);
+  $('#jrHz').innerHTML = fchips('jr', 'hz', J.horizons.map(h => [h.id, h.label]));
+  $('#jrScoreSub').textContent = 'at ' + hl;
+  $('#jrScore').innerHTML = `<thead><tr><th>Source</th><th class="n">Advice</th><th class="n">Followed</th><th class="n">Hit rate</th><th class="n">Right · wrong · pending</th><th class="n">$ if followed</th><th class="n">$ what you did</th></tr></thead><tbody>` +
+    J.scorecard.map(c => { const h = (c.horizons || []).find(x => x.id === hz) || {}; return `<tr${c.source === 'all' ? ' class="tot"' : ''}><td>${esc(JR_SOURCE[c.source] || c.source)}</td><td class="n">${c.count}</td><td class="n">${isNum(c.followedPct) ? Math.round(c.followedPct) + '%' : '—'}</td><td class="n">${isNum(h.hitPct) ? Math.round(h.hitPct) + '%' : '—'}</td><td class="n">${h.right || 0} · ${h.wrong || 0} · ${h.pending || 0}</td><td class="n">${jrMoney(h.ifFollowedUsd)}</td><td class="n">${jrMoney(h.yoursUsd)}</td></tr>`; }).join('') + '</tbody>';
+  $('#jrNote').textContent = 'Right: BUY / ADD / BUY POINT beat QQQ; EXIT / AVOID trailed QQQ; HOLD did not trail QQQ by more than ' + J.holdTolerancePts + ' points; REVIEW / ALERT / WAIT are information only. Followed: a trade of that ticker in the ledger within ' + J.actedDays + ' trading days. ' + J.assumption + (J.noHistory.length ? ' No price history yet: ' + J.noHistory.join(', ') + '.' : '');
+  const srcs = [...new Set(J.rows.map(r => r.source))], advs = [...new Set(J.rows.map(r => r.advice))], acts = [...new Set(J.rows.map(r => r.acted))];
+  $('#jrFilters').innerHTML = fsel('jr', 'source', 'Source', [['All', 'All sources'], ...srcs.map(x => [x, JR_SOURCE[x] || x])]) + fsel('jr', 'advice', 'Advice', [['All', 'All advice'], ...advs.map(x => [x, x.replace('_', ' ')])])
+    + fsel('jr', 'acted', 'Acted', [['All', 'Acted: any'], ...acts.map(x => [x, JR_ACTED[x] || x])]) + fsel('jr', 'right', 'Right at the horizon', [['All', 'Right: any'], ['right', 'Right'], ['wrong', 'Wrong'], ['pending', 'Pending'], ['info', 'Info only'], ['no data', 'No data']])
+    + `<input class="fin" id="jrQ" placeholder="Ticker" aria-label="Search by ticker" value="${esc(F.jr.q)}" autocapitalize="characters"><input class="fin date" type="date" id="jrFrom" aria-label="From" value="${esc(F.jr.from)}"><input class="fin date" type="date" id="jrTo" aria-label="To" value="${esc(F.jr.to)}">`;
+  $('#jrQ').addEventListener('input', e => { F.jr.q = e.target.value; store.set('f-jr', F.jr); renderJournalRows(); });
+  [['from', '#jrFrom'], ['to', '#jrTo']].forEach(([k, id]) => $(id).addEventListener('change', e => { F.jr[k] = /^\d{4}-\d{2}-\d{2}$/.test(e.target.value) ? e.target.value : ''; store.set('f-jr', F.jr); renderJournalRows(); }));
+  renderJournalRows();
+  if (current === 'journal') safely('journal chart', journalChart);
+}
+const JR_MAX = 200;
+function jrHorizonLine(J, s) {
+  const v = JR_VERDICT[s.status] || [s.status, 'neutral'];
+  return `<tr><td>${esc((J.horizons.find(h => h.id === s.id) || {}).label || s.id)}</td><td class="n ${cls(s.stockPct)}">${pct(s.stockPct)}</td><td class="n ${cls(s.qqqPct)}">${pct(s.qqqPct)}</td><td class="n ${cls(s.excessPts)}">${pts(s.excessPts)}</td><td>${chip('', v[0], v[1])}</td><td class="n">${jrMoney(s.edgeUsd)}</td></tr>`;
+}
+function jrCard(J, r, hz) {
+  const sc = jrScore(r, hz) || { status: 'pending' }, v = JR_VERDICT[sc.status] || [sc.status, 'neutral'];
+  const name = r.ticker ? (r.subject && r.subject !== r.ticker ? r.subject : r.ticker) : 'Market';
+  const you = (r.yoursUsd || {})[hz];
+  return `<article class="card" style="padding:12px"><div class="hcard-top"><span class="ticker name">${esc(name)}</span>${jrAdvice(r.advice)}${chip('', v[0], v[1])}<span class="muted small" style="margin-left:auto">${fmtDay(r.date)}</span></div>
+    <p class="small muted" style="margin:6px 0 2px">${esc(JR_SOURCE[r.source] || r.source)}${r.horizon ? ' · horizon ' + esc(r.horizon) : ''}</p>
+    <p class="small wrapany" style="margin:0 0 8px">${esc(r.detail)}</p>
+    <div class="facts"><div><div class="k">Price then</div><div class="num">${isNum(r.price) ? fmtP(r.price) : '—'}</div></div><div><div class="k">QQQ then</div><div class="num">${isNum(r.qqq) ? fmtP(r.qqq) : '—'}</div></div><div><div class="k">Acted</div><div>${esc(JR_ACTED[r.acted] || r.acted)}${r.trade ? ' <span class="muted small">(' + esc(r.trade.side) + ' ' + fmtDay(r.trade.date) + ')</span>' : ''}</div></div><div><div class="k">You got (${esc(hz)})</div><div class="num">${jrMoney(you)}</div></div></div>
+    <div class="scroll-x"><table class="small"><thead><tr><th>Horizon</th><th class="n">Stock</th><th class="n">QQQ</th><th class="n">vs QQQ</th><th>Right?</th><th class="n">$ if followed</th></tr></thead><tbody>${(r.scores || []).map(s => jrHorizonLine(J, s)).join('')}</tbody></table></div></article>`;
+}
+function renderJournalRows() {
+  const J = D.journal, rows = jrRows(), hz = F.jr.hz;
+  $('#jrList').innerHTML = !rows.length ? empty('No advice matches these filters.') : rows.slice(0, JR_MAX).map(r => jrCard(J, r, hz)).join('') + (rows.length > JR_MAX ? empty('Showing the newest ' + JR_MAX + ' of ' + rows.length + '; filter to see the rest.') : '');
+}
+function journalChart() {
+  const J = D && D.journal, cv = $('#ch-journal'); if (!cv) return;
+  if (!J || !J.rows.length) { destroyChart('journal'); return; }
+  const cols = ['accent', 'c2', 'c3', 'c4', 'c5', 'muted'];
+  const cards = J.scorecard.filter(c => c.horizons.some(h => isNum(h.hitPct)));
+  if (!cards.length) { destroyChart('journal'); cv.parentElement.innerHTML = '<div class="chart-fallback">No advice has reached a horizon yet: everything is still pending.</div>'; return; }
+  const ds = cards.map((c, i) => ({ label: JR_SOURCE[c.source] || c.source, data: J.horizons.map(h => { const x = c.horizons.find(y => y.id === h.id); return x && isNum(x.hitPct) ? x.hitPct : null; }), backgroundColor: tok(cols[i % cols.length]), borderRadius: 4, maxBarThickness: 22 }));
+  const o = baseOpts(); o.scales.y.min = 0; o.scales.y.max = 100; o.scales.y.ticks.callback = v => v + '%'; o.interaction = { mode: 'nearest', intersect: true };
+  o.plugins.tooltip.callbacks = { label: c => ' ' + c.dataset.label + ': ' + (isNum(c.parsed.y) ? Math.round(c.parsed.y) + '%' : '—') };
+  mkChart('journal', cv, { type: 'bar', data: { labels: J.horizons.map(h => h.label), datasets: ds }, options: o });
+}
+
 /* History */
 function hiRows() {
   const f = F.hi, items = D.history ? D.history.items : [];
@@ -1024,7 +1130,7 @@ function renderHistoryRows() {
 }
 function openHistory(i) {
   const x = D.history.items[i]; if (!x) return;
-  openSheet(x.label, `<div class="facts">${[['Date sold', fmtDay(x.date)], ['Quantity', qtyTxt(x.qty)], ['Cost', fmt$(x.cost)], ['Proceeds', fmt$(x.proceeds)], ['Gain', `<span class="${cls(x.gain)}">${fmt$(x.gain)} (${pct(x.gainPct)})</span>`], ['Est. tax ' + taxPct(), fmt$(x.tax)], ['Held', isNum(x.heldDays) ? x.heldDays + ' days' : '—'], ['From', x.source === 'transactions' ? '📒 Transactions' : 'Portfolio, CLOSED positions']].map(([k, v]) => `<div><div class="k">${esc(k)}</div><div class="num">${v}</div></div>`).join('')}</div>`);
+  openSheet(x.label, `<div class="facts">${[['Date sold', fmtDay(x.date)], ['Quantity', qtyTxt(x.qty)], ['Cost', fmt$(x.cost)], ['Proceeds', fmt$(x.proceeds)], ['Gain', `<span class="${cls(x.gain)}">${fmt$(x.gain)} (${pct(x.gainPct)})</span>`], ['Est. tax ' + taxPct(), fmt$(x.tax)], ['Held', isNum(x.heldDays) ? x.heldDays + ' days' : '—'], ['From', x.source === 'transactions' ? '📒 Transactions' : x.source === 'ledger' ? 'Ledger (closed positions)' : 'Portfolio, CLOSED positions']].map(([k, v]) => `<div><div class="k">${esc(k)}</div><div class="num">${v}</div></div>`).join('')}</div>`);
 }
 
 /* Analyze */
@@ -1139,13 +1245,23 @@ const KIND_SUBTYPE = { stocks: 'Stocks', btcFunds: 'Bitcoin funds', crypto: 'Cry
 const KIND_GROUP = { stock: 'stocks', btcFund: 'btcFunds', crypto: 'crypto' };
 const ASSET_GROUPS = [['pension', 'Pension'], ['funds', 'Other savings fund'], ['realEstate', 'Real estate'], ['cash', 'Cash']];
 const STALE_DAYS = 90;
+/* One control: $ · ₪ · % (nwCur 'USD' | 'ILS' | 'PCT'); % keeps the last money currency (nwMoney) for its arithmetic. */
 let nwCur = store.get('nw-cur', 'USD');
+if (!['USD', 'ILS', 'PCT'].includes(nwCur)) nwCur = 'USD';
+let nwMoney = store.get('nw-money', nwCur === 'ILS' ? 'ILS' : 'USD');
+if (nwMoney !== 'ILS') nwMoney = 'USD';
 const nwOpen = new Set(store.get('nw-open', []));
 const todayLocal = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 const dayDiff = (a, b) => Math.round((Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 86400000);
 const NW = () => (D && D.networth) || null;
 const fxNow = () => { const N = NW(); return N && N.fx && isNum(N.fx.usdIls) && N.fx.usdIls > 0 ? N.fx.usdIls : null; };
-const cur = () => (nwCur === 'ILS' && fxNow() ? 'ILS' : 'USD');
+const pctMode = () => nwCur === 'PCT';
+const cur = () => ((pctMode() ? nwMoney : nwCur) === 'ILS' && fxNow() ? 'ILS' : 'USD');
+/* Short money for the chips: $1.2M, $12k, $950. */
+const fmtK = (v, c) => !isNum(v) ? '—' : Math.abs(v) >= 1e6 ? (v < 0 ? '−' : '') + sym(c) + (Math.abs(v) / 1e6).toFixed(Math.abs(v) >= 1e7 ? 1 : 2) + 'M' : Math.abs(v) >= 1e4 ? (v < 0 ? '−' : '') + sym(c) + Math.round(Math.abs(v) / 1000) + 'k' : fmtC(v, c);
+const plus = (v, txt) => (isNum(v) && v > 0 ? '+' : '') + txt;
+/* A holding's gain % (value against cost, both in its own currency); null without a cost. */
+const gainPct = x => (isNum(x.value) && isNum(x.cost) && x.cost !== 0 ? (x.value - x.cost) / Math.abs(x.cost) * 100 : null);
 const sym = c => (c === 'ILS' ? '₪' : '$');
 const fmtC = (v, c, dp = 0) => !isNum(v) ? '—' : (v < 0 ? '−' : '') + sym(c) + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
 const r2 = x => (isNum(x) ? Math.round(x * 100) / 100 : null);
@@ -1217,6 +1333,106 @@ function boughtOf(s) {
   return days[0] == null ? null : days[0];
 }
 /* lots-math:end */
+/* change-math:start (a copy of rangeFrom, rangeStartIndex, changeOver and rebase in src/ledger/networth.ts; test/dashboard.networth.test.ts holds them equal) */
+const CHANGE_RANGES = ['1D', '1W', '1M', 'YTD', '1Y', '3Y', '5Y', 'All'];
+function rangeFrom(last, key) {
+  const back = k => new Date(Date.parse(last + 'T12:00:00Z') - k * 86400000).toISOString().slice(0, 10);
+  const yrs = k => (Number(last.slice(0, 4)) - k) + last.slice(4);
+  if (key === '1W') return back(7);
+  if (key === '1M') return back(30);
+  if (key === '3M') return back(91);
+  if (key === 'YTD') return (Number(last.slice(0, 4)) - 1) + '-12-31';
+  if (key === '1Y') return yrs(1);
+  if (key === '3Y') return yrs(3);
+  if (key === '5Y') return yrs(5);
+  return null;
+}
+function rangeStartIndex(days, key) {
+  const n = days.length;
+  if (n < 2) return -1;
+  if (key === '1D') return n - 2;
+  const from = rangeFrom(days[n - 1], key);
+  if (from == null) return 0;
+  let i = 0;
+  for (let k = 0; k < n - 1; k++) if (days[k] <= from) i = k;
+  return i;
+}
+function changeOver(days, values, key) {
+  let i = rangeStartIndex(days, key);
+  if (i < 0) return null;
+  const ok = v => typeof v === 'number' && Number.isFinite(v);
+  let j = values.length - 1;
+  while (j >= 0 && !ok(values[j])) j--;
+  while (i < j && !ok(values[i])) i++;
+  if (j < 0 || i >= j) return null;
+  const a = values[i], b = values[j];
+  return { i, j, abs: Math.round((b - a) * 100) / 100, pct: a === 0 ? null : Math.round((b - a) / Math.abs(a) * 10000) / 100 };
+}
+function rebase(values, base) {
+  const ok = typeof base === 'number' && Number.isFinite(base) && base !== 0;
+  return values.map(v => (!ok || v == null || !Number.isFinite(v) ? null : Math.round((v - base) / Math.abs(base) * 10000) / 100));
+}
+/* change-math:end */
+const STATIC_G = ['pension', 'funds', 'realEstate', 'cash'];
+let nwRange = store.get('nw-range', '1M');
+if (!CHANGE_RANGES.includes(nwRange)) nwRange = '1M';
+/*
+ * The value series behind the change chips and the graph (USD by group): the ESTIMATED days of growth.estimate (only
+ * before the first snapshot), the snapshots, then (withNow) today's values as the newest point. est[i] = an estimated
+ * day. flat: on estimated days, the groups the estimate does not rebuild (pension, funds, real estate, cash, and a
+ * market group with no price history) are taken at today's value (the chips: "unchanged, unknown"); else left empty.
+ */
+function nwSeries(flat, withNow) {
+  const G = D && D.growth, N = NW(), E = G && G.estimate, S = G ? G.snapshots || [] : [];
+  const first = S.length ? S[0].date : null, today = {};
+  if (N && N.groups) N.groups.forEach(g => { today[g.id] = g.usd; });
+  const out = { days: [], est: [], fx: [], usd: {} };
+  NG.forEach(g => { out.usd[g] = []; });
+  const push = (d, e, f, vals) => { out.days.push(d); out.est.push(e); out.fx.push(f); NG.forEach(g => out.usd[g].push(isNum(vals[g]) ? vals[g] : null)); };
+  if (E && Array.isArray(E.days)) E.days.forEach((d, i) => {
+    if (first && d >= first) return;
+    const v = {};
+    NG.forEach(g => { const arr = E.usd && E.usd[g]; if (arr) v[g] = arr[i]; else if (flat) v[g] = today[g]; });
+    push(d, true, isNum(E.fx) ? E.fx : fxNow(), v);
+  });
+  let lf = null;
+  S.forEach(s => { if (isNum(s.fx)) lf = s.fx; push(s.date, false, lf || fxNow(), s.usd || {}); });
+  if (withNow && N && N.groups) {
+    const d = N.asOf || todayLocal();
+    if (out.days.length && out.days[out.days.length - 1] >= d) { out.days.pop(); out.est.pop(); out.fx.pop(); NG.forEach(g => out.usd[g].pop()); }
+    push(d, false, fxNow(), today);
+  }
+  return out;
+}
+/* The total of `groups` per point, in currency c (₪: each day's rate; estimated days: today's). */
+function seriesTotal(Sr, groups, c) {
+  return Sr.days.map((_, i) => { let t = 0, any = false; groups.forEach(g => { const v = Sr.usd[g][i]; if (isNum(v)) { t += v; any = true; } }); return any ? r2(c === 'ILS' ? t * (Sr.fx[i] || fxNow() || 1) : t) : null; });
+}
+/* The change of `groups` over range `key`: { abs, pct, est } or null; null too for a static group whose start is estimated (no history). */
+function nwChange(Sr, groups, key, c) {
+  const ch = changeOver(Sr.days, seriesTotal(Sr, groups, c), key);
+  if (!ch) return null;
+  const E = D && D.growth && D.growth.estimate, est = !!Sr.est[ch.i];
+  const flatG = (E && E.coverage && E.coverage.flatGroups) || [];
+  if (est && groups.length === 1 && (STATIC_G.includes(groups[0]) || flatG.includes(groups[0]) || !(E && E.usd && E.usd[groups[0]]))) return null;
+  return Object.assign({}, ch, { est, from: Sr.days[ch.i] });
+}
+/* A change as text: % mode the % only; else money (and the % beside when `both`). */
+function chgTxt(ch, c, both) {
+  if (!ch) return '—';
+  const p = `<span class="${cls(ch.pct)}">${pct(ch.pct, 1)}</span>`;
+  if (pctMode()) return p;
+  const m = `<span class="${cls(ch.abs)}">${plus(ch.abs, fmtK(ch.abs, c))}</span>`;
+  return both ? m + ' ' + p : m;
+}
+function rangeChips(Sr, groups, c, mini) {
+  return `<div class="rchips${mini ? ' mini' : ''}" role="group" aria-label="Change over">${CHANGE_RANGES.map(r => {
+    const ch = nwChange(Sr, groups, r, c);
+    const t = !ch ? '<span class="num muted">—</span>' : pctMode() ? `<span class="num ${cls(ch.pct)}">${pct(ch.pct, 1)}</span>` : `<span class="num ${cls(ch.abs)}">${plus(ch.abs, fmtK(ch.abs, c))}</span>${mini ? '' : `<span class="num ${cls(ch.pct)}">${pct(ch.pct, 1)}</span>`}`;
+    const tip = ch ? 'Since ' + fmtDay(ch.from) + (ch.est ? ' (estimated start)' : '') : 'Not enough history';
+    return `<button class="rchip" type="button" data-nwrange="${r}" aria-pressed="${nwRange === r}" title="${esc(tip)}" aria-label="${esc(r + ': ' + tip)}"><b>${r}</b>${t}${ch && ch.est ? '<span class="est">est.</span>' : ''}</button>`;
+  }).join('')}</div>`;
+}
 /* The list's lines: each group without its debt items (cash shows its positive part), then one "Debt" line with every debt item. */
 function nwLines(N) {
   const fx = fxNow(), L = [];
@@ -1303,21 +1519,21 @@ function sourceTxt(x) { return x.source === 'live' ? 'live price' : x.source ===
 /* A real estate item's value and mortgage in the chosen currency (its own when there is no rate). */
 function reParts(x) { const c = cur(), fx = fxNow(), k = c === 'ILS' ? 1 : 0, val = conv(x.value, x.currency, fx)[k], dbt = conv(x.debt, x.currency, fx)[k]; return isNum(val) && isNum(dbt) ? [val, dbt, c] : [x.value, x.debt, x.currency]; }
 function nwItemRow(x, i) {
-  const [v, vc] = itemShown(x);
+  const [v, vc] = itemShown(x), gp = pctMode() ? gainPct(x) : null;
   const re = x.group === 'realEstate' && isNum(x.debt) && x.debt > 0 ? reParts(x) : null;
   const sub = x.sub ? `<br><span class="muted small" dir="auto">${esc(x.sub)}</span>` : '';
   const extra = re ? `<br><span class="muted small num" dir="ltr">value ${fmtC(re[0], re[2])} · mortgage ${fmtC(-re[1], re[2])} · net ${fmtC(v, vc)}</span>` : isDebtItem(x) ? '<br><span class="muted small">debt (not an asset)</span>' : '';
   const when = x.asOf ? `<span class="small ${x.stale ? 'stale' : 'muted'}"${x.stale ? ' title="Older than 90 days: update it"' : ''}>${x.stale ? '⚠ ' : ''}${fmtDay(x.asOf)}</span>` : `<span class="small muted">${esc(sourceTxt(x))}</span>`;
-  return `<button class="nwi" type="button" data-nwitem="${i}"><span class="grow"><span class="nm" dir="auto">${esc(x.name)}</span>${x.pending ? ' <span class="chip info">saved</span>' : ''}${sub}${extra}</span><span class="right"><span class="num ${isNum(v) && v < 0 ? 'down' : ''}">${fmtC(v, vc)}</span><br>${when}</span></button>`;
+  return `<button class="nwi" type="button" data-nwitem="${i}"><span class="grow"><span class="nm" dir="auto">${esc(x.name)}</span>${x.pending ? ' <span class="chip info">saved</span>' : ''}${sub}${extra}</span><span class="right">${isNum(gp) ? `<span class="num ${cls(gp)}" title="gain against cost">${pct(gp, 1)}</span><br><span class="muted small num">${fmtC(v, vc)}</span>` : `<span class="num ${isNum(v) && v < 0 ? 'down' : ''}">${fmtC(v, vc)}</span>`}<br>${when}</span></button>`;
 }
 function renderNetworth() {
   const N = NW(), c = cur(), fx = fxNow();
-  $('#nwCur').innerHTML = [['USD', '$'], ['ILS', '₪']].map(([k, l]) => `<button type="button" data-nwcur="${k}" aria-pressed="${c === k}" aria-label="Show in ${k === 'USD' ? 'dollars' : 'shekels'}"${k === 'ILS' && !fx ? ' disabled title="No USD/ILS rate yet"' : ''}>${l}</button>`).join('');
+  $('#nwCur').innerHTML = [['USD', '$'], ['ILS', '₪'], ['PCT', '%']].map(([k, l]) => `<button type="button" data-nwcur="${k}" aria-pressed="${k === 'PCT' ? pctMode() : !pctMode() && c === k}" aria-label="${k === 'PCT' ? 'Show changes and gains in percent' : 'Show in ' + (k === 'USD' ? 'dollars' : 'shekels')}"${k === 'ILS' && !fx ? ' disabled title="No USD/ILS rate yet"' : ''}>${l}</button>`).join('');
   $('#nwEdit').hidden = !N;
   renderPending();
   if (!N) {
     $('#nwKpis').innerHTML = `<div class="kpi hero">${empty('No ledger yet. When your holdings move to the ledger (the private data branch), this screen shows everything you own: stocks, crypto, calls, pension, funds, real estate and cash.')}</div>`;
-    $('#nwGroups').innerHTML = ''; $('#nwSub').textContent = ''; $('#nwFilt').innerHTML = ''; renderTotals(); renderRatios(); renderPieLegends(); renderGrowthControls(); return;
+    $('#nwGroups').innerHTML = ''; $('#nwChips').innerHTML = ''; $('#nwSub').textContent = ''; $('#nwFilt').innerHTML = ''; renderTotals(); renderRatios(); renderPieLegends(); renderGrowthControls(); return;
   }
   const T = N.total, tot = c === 'ILS' ? T.ils : T.usd, oc = c === 'ILS' ? 'USD' : 'ILS', other = c === 'ILS' ? T.usd : T.ils;
   const sumG = ids => N.groups.filter(g => ids.includes(g.id)).reduce((s, g) => s + g.usd, 0);
@@ -1326,23 +1542,28 @@ function renderNetworth() {
   const bal = (usdK, ilsK) => (bI ? B.ils[ilsK] : inCur(B[usdK]));
   const L = nwLines(N), lineUsd = id => { const l = L.find(y => y.id === id); return l ? l.usd : 0; };
   const reGross = N.groups.find(g => g.id === 'realEstate');
+  const Sr = nwSeries(true, true), nch = nwChange(Sr, NG, nwRange, c);
+  const heroChg = `<div class="chg">${nch ? chgTxt(nch, c, true) + ` <span class="muted small">${esc(nwRange)}${nch.est ? ' · est.' : ''}</span>` : '<span class="muted small">no change yet</span>'}</div>`;
   const kp = [
-    ['Net worth', fmtC(tot, c), '', 'hero', `<span class="muted num small">assets − debts · ${isNum(other) ? fmtC(other, oc) + ' · ' : ''}USD/ILS ${fx ? fx.toFixed(3) : '—'}${N.fx && N.fx.date ? ' (' + fmtDay(N.fx.date) + ')' : ''}</span>`],
+    ['Net worth', fmtC(tot, c), '', 'hero', heroChg + `<span class="muted num small">assets − debts · ${isNum(other) ? fmtC(other, oc) + ' · ' : ''}USD/ILS ${fx ? fx.toFixed(3) : '—'}${N.fx && N.fx.date ? ' (' + fmtDay(N.fx.date) + ')' : ''}</span>`],
     ['Assets', fmtC(bal('assetsUsd', 'assets'), c), '', 'big', '<span class="muted small">markets, pension & funds, property value, cash</span>'],
     ['Debts', fmtC(bal('debtsUsd', 'debts'), c), B.debtsUsd < 0 ? 'down' : '', 'big', `<span class="muted small num">mortgages ${fmtC(bal('mortgagesUsd', 'mortgages'), c)} · other ${fmtC(bal('otherDebtsUsd', 'otherDebts'), c)}</span>`],
     ['Markets', fmtC(inCur(sumG(['stocks', 'btcFunds', 'crypto', 'calls'])), c), ''], ['Pension & funds', fmtC(inCur(sumG(['pension', 'funds'])), c), ''],
     ['Real estate (value)', fmtC(inCur(reGross ? (isNum(reGross.grossUsd) ? reGross.grossUsd : reGross.usd) : 0), c), ''], ['Cash', fmtC(inCur(lineUsd('cash')), c), ''],
     ['Values to update', String(stale), stale ? 'stalek' : 'up', 'last', `<span class="muted small">older than ${STALE_DAYS} days</span>`]
   ];
+  $('#nwChips').innerHTML = rangeChips(Sr, NG, c, false);
   $('#nwKpis').innerHTML = kp.map(([l, v, k, x, sub]) => `<div class="kpi ${x || ''}"><div class="label">${esc(l)}</div><div class="val ${k === 'stalek' ? 'stale' : k}">${v}</div>${sub || ''}</div>`).join('');
   $('#nwSub').textContent = N.items.length + ' items' + (T.unpriced ? ' · ' + T.unpriced + ' not priced' : '');
   const pos = L.filter(g => !g.debt).reduce((s, g) => s + Math.max(0, g.usd), 0) || 1, maxV = Math.max(1, ...L.map(g => Math.abs(g.usd)));
   $('#nwFilt').innerHTML = nwFilter ? `<div class="fbar"><span class="grow">Showing <b>${esc(nwFilter === 'debt' ? 'Debt' : NG_LABEL[nwFilter])}</b> only</span><button class="linkbtn" type="button" data-nwpie="${nwFilter}">Show all</button></div>` : '';
   $('#nwGroups').innerHTML = L.filter(g => !nwFilter || g.id === nwFilter).map(g => {
     const open = nwOpen.has(g.id), v = c === 'ILS' ? g.ils : g.usd, col = g.debt ? 'bad' : NG_COLOR[g.id] || 'muted';
+    const gch = g.debt ? null : nwChange(Sr, [g.id], nwRange, c), main = pctMode() && !g.debt ? (gch ? `<span class="${cls(gch.pct)}">${pct(gch.pct, 1)}</span>` : '—') : fmtC(v, c);
+    const chgLine = g.debt ? '' : `<div class="muted small" style="margin-top:4px;display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap"><span>${esc(nwRange)}${gch && gch.est ? ' · est.' : ''}: <span class="gchg">${gch ? chgTxt(gch, c, true) : 'no history yet'}</span></span>${pctMode() ? `<span class="num">${fmtC(v, c)}</span>` : ''}</div>`;
     const items = g.items.slice().sort((a, b) => g.debt ? (a[0].usd || 0) - (b[0].usd || 0) : (b[0].usd || 0) - (a[0].usd || 0));
-    return `<li class="${open ? 'open' : ''}"><button class="nwg" type="button" data-nwg="${g.id}" aria-expanded="${open}"><div class="top"><i class="sw" style="background:var(--${col})"></i><span class="grow"><b>${esc(g.label)}</b> <span class="muted small">(${g.count})</span>${g.stale ? ` <span class="chip stalechip">${g.stale} to update</span>` : ''}</span><span class="num ${g.debt ? 'down' : ''}">${fmtC(v, c)}</span><span class="num muted small" style="width:46px;text-align:right">${g.debt ? '' : (Math.max(0, g.usd) / pos * 100).toFixed(1) + '%'}</span><span class="chevron" aria-hidden="true">›</span></div>
-      <div class="bar" aria-hidden="true"><i style="width:${(Math.abs(g.usd) / maxV * 100).toFixed(1)}%;background:var(--${col})"></i></div>${g.id === 'realEstate' && isNum(g.debtUsd) && g.debtUsd > 0 ? `<div class="muted small num" style="margin-top:4px">value ${fmtC(inCur(g.grossUsd), c)} − mortgage ${fmtC(inCur(g.debtUsd), c)} = net ${fmtC(v, c)}</div>` : ''}</button>${open ? items.map(([x, i]) => nwItemRow(x, i)).join('') : ''}</li>`;
+    return `<li class="${open ? 'open' : ''}"><button class="nwg" type="button" data-nwg="${g.id}" aria-expanded="${open}"><div class="top"><i class="sw" style="background:var(--${col})"></i><span class="grow"><b>${esc(g.label)}</b> <span class="muted small">(${g.count})</span>${g.stale ? ` <span class="chip stalechip">${g.stale} to update</span>` : ''}</span><span class="num ${g.debt ? 'down' : ''}">${main}</span><span class="num muted small" style="width:46px;text-align:right">${g.debt ? '' : (Math.max(0, g.usd) / pos * 100).toFixed(1) + '%'}</span><span class="chevron" aria-hidden="true">›</span></div>
+      <div class="bar" aria-hidden="true"><i style="width:${(Math.abs(g.usd) / maxV * 100).toFixed(1)}%;background:var(--${col})"></i></div>${chgLine}${g.id === 'realEstate' && isNum(g.debtUsd) && g.debtUsd > 0 ? `<div class="muted small num" style="margin-top:4px">value ${fmtC(inCur(g.grossUsd), c)} − mortgage ${fmtC(inCur(g.debtUsd), c)} = net ${fmtC(v, c)}</div>` : ''}</button>${open && !g.debt ? rangeChips(Sr, [g.id], c, true) : ''}${open ? items.map(([x, i]) => nwItemRow(x, i)).join('') : ''}</li>`;
   }).join('') + (nwFilter ? '' : `<li><div class="row" style="font-weight:600"><span class="grow">Net worth (assets − debts)</span><span class="num">${fmtC(tot, c)}</span></div></li>`);
   renderTotals(); renderRatios(); renderPieLegends();
   renderGrowthControls();
@@ -1355,6 +1576,7 @@ function openNwItem(i) {
   else if (isDebtItem(x)) facts.push(['Debt left', fmtC(x.debt, x.currency)]);
   if (isNum(x.qty)) facts.push([x.group === 'calls' ? 'Contracts' : 'Quantity', qtyTxt(x.qty)]);
   if (isNum(x.cost)) facts.push(['Cost', fmtC(x.cost, x.currency)]);
+  if (isNum(gainPct(x))) facts.push(['Gain', pctMode() ? `<span class="${cls(gainPct(x))}">${pct(gainPct(x), 1)}</span>` : `<span class="${cls(x.value - x.cost)}">${plus(x.value - x.cost, fmtC(x.value - x.cost, x.currency))}</span> <span class="small ${cls(gainPct(x))}">${pct(gainPct(x), 1)}</span>`]);
   facts.push(['Last updated', x.asOf ? (x.stale ? `<span class="stale">⚠ ${fmtDay(x.asOf)} · ${x.ageDays} days ago</span>` : fmtDay(x.asOf)) : esc(sourceTxt(x))]);
   const bday = x.raw && !x.raw.side && x.ref && x.ref.file === LF.holdings ? boughtOf(x.raw) : x.raw && x.raw.bought;
   if (bday) facts.push(['Bought', fmtDay(bday) + (x.raw && !x.raw.bought ? ' <span class="muted small">(first lot)</span>' : '')]);
@@ -1375,7 +1597,7 @@ function lotsHtml(x, i) {
   const unit = isNum(x.value) && isNum(x.qty) && x.qty ? x.value / x.qty : null, L = lotsOf(x.raw, unit, todayLocal()), c = x.currency;
   const add = `<button class="linkbtn" type="button" data-edit="lotadd" data-i="${i}">Add a lot</button>`;
   if (!L.rows.length) return `<div class="ghead" style="margin-top:4px"><span>Lots</span>${add}</div><p class="muted small" style="margin:0 0 10px">No dated lots: the whole quantity counts as one buy${x.raw.bought ? ' on ' + fmtDay(x.raw.bought) : ''} at the average cost.</p>`;
-  const tr = L.rows.map(r => `<tr${r.implied ? ' class="muted"' : ''}><td>${r.implied ? 'rest (undated)' : r.date ? fmtDay(r.date) : 'undated'}${r.note ? `<div class="small muted" dir="auto">${esc(r.note)}</div>` : ''}</td><td class="n">${qtyTxt(r.qty)}</td><td class="n">${isNum(r.price) ? fmtC(r.price, c, 2) : '—'}</td><td class="n ${cls(r.gain)}">${isNum(r.gain) ? fmtC(r.gain, c) : '—'}${isNum(r.gainPct) ? `<div class="small">${pct(r.gainPct)}</div>` : ''}</td><td class="n">${isNum(r.heldDays) ? r.heldDays.toLocaleString('en-US') : '—'}</td><td>${r.implied ? '' : `<button class="linkbtn" type="button" data-edit="lotdel" data-i="${i}" data-lot="${r.index}" aria-label="Remove this lot">✕</button>`}</td></tr>`).join('');
+  const tr = L.rows.map(r => `<tr${r.implied ? ' class="muted"' : ''}><td>${r.implied ? 'rest (undated)' : r.date ? fmtDay(r.date) : 'undated'}</td><td class="n">${qtyTxt(r.qty)}</td><td class="n">${isNum(r.price) ? fmtC(r.price, c, 2) : '—'}</td><td class="n ${cls(r.gain)}">${pctMode() ? (isNum(r.gainPct) ? pct(r.gainPct) : '—') : `${isNum(r.gain) ? fmtC(r.gain, c) : '—'}${isNum(r.gainPct) ? `<div class="small">${pct(r.gainPct)}</div>` : ''}`}</td><td class="n">${isNum(r.heldDays) ? r.heldDays.toLocaleString('en-US') : '—'}</td><td>${r.implied ? '' : `<button class="linkbtn" type="button" data-edit="lotdel" data-i="${i}" data-lot="${r.index}" aria-label="Remove this lot">✕</button>`}</td></tr>${r.note ? `<tr class="lot-note"><td colspan="6" class="small muted" dir="auto">${esc(r.note)}</td></tr>` : ''}`).join('');
   return `<div class="ghead" style="margin-top:4px"><span>Lots</span>${add}</div><div class="scroll-x"><table class="small"><thead><tr><th>Bought</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Gain</th><th class="n">Days held</th><th></th></tr></thead><tbody>${tr}</tbody></table></div>`
     + (L.problem ? `<p class="small stale" style="margin:6px 0 10px">⚠ ${esc(L.problem)}</p>` : '<p class="muted small" style="margin:6px 0 10px">The runs use the quantity and the average cost; the lots are for you (the rest is priced so the total cost stays the same).</p>');
 }
@@ -1427,23 +1649,28 @@ function withoutFlows(days, values, flows) {
   return out;
 }
 /* growth-math:end */
-const GR = Object.assign({ groups: NG.slice(), mode: 'stack', range: 'All' }, store.get('gr', {}));
+const GR = Object.assign({ groups: NG.slice(), mode: 'stack', range: 'All', inclStatic: false }, store.get('gr', {}));
 GR.groups = (Array.isArray(GR.groups) ? GR.groups : []).filter(g => NG.includes(g)); if (!GR.groups.length) GR.groups = NG.slice();
+GR.inclStatic = GR.inclStatic === true;
+const GR_RANGES = ['1M', '3M', 'YTD', '1Y', '3Y', '5Y', 'All'];
+if (!GR_RANGES.includes(GR.range)) GR.range = 'All';
 let grWin = null, grPress = null, grLong = false, grFlowsShown = [];
-const saveGR = () => store.set('gr', { groups: GR.groups, mode: GR.mode, range: GR.range });
-function grDays() { return D && D.growth ? D.growth.snapshots.map(s => s.date) : []; }
+const saveGR = () => store.set('gr', { groups: GR.groups, mode: GR.mode, range: GR.range, inclStatic: GR.inclStatic });
+/* The graph's points: the estimated days (static groups flat only when the owner includes them), then the snapshots; today's values close the line only when there is no snapshot yet. */
+function grSeries() { const G = D && D.growth; return G ? nwSeries(GR.inclStatic, !(G.snapshots || []).length) : null; }
+function grDays() { const Sr = grSeries(); return Sr ? Sr.days : []; }
 function grWindow(days) {
   const n = days.length; if (n < 2) return [0, n - 1];
   if (grWin && grWin[1] < n && grWin[0] < grWin[1]) return grWin;
-  const last = days[n - 1], back = k => new Date(Date.parse(last + 'T12:00:00Z') - k * 86400000).toISOString().slice(0, 10);
-  const from = { '1M': back(30), '3M': back(91), 'YTD': last.slice(0, 4) + '-01-01', '1Y': back(365), '5Y': back(1826) }[GR.range] || days[0];
-  let a = days.findIndex(d => d >= from); if (a < 0 || a > n - 2) a = Math.max(0, n - 2);
+  let a = rangeStartIndex(days, GR.range); if (a < 0 || a > n - 2) a = Math.max(0, n - 2);
   return [a, n - 1];
 }
 function renderGrowthControls() {
-  const all = GR.groups.length === NG.length;
+  const all = GR.groups.length === NG.length, E = D && D.growth && D.growth.estimate;
   $('#grChips').innerHTML = `<button class="fchip" type="button" data-grall="1" aria-pressed="${all}">All</button>` + NG.map(g => { const on = GR.groups.includes(g); return `<span class="gchip ${on ? 'on' : ''}"><button type="button" data-grg="${g}" aria-pressed="${on}"><i class="sw" style="background:var(--${NG_COLOR[g]})"></i>${esc(NG_LABEL[g])}</button><button class="only" type="button" data-gronly="${g}" aria-label="Only ${esc(NG_LABEL[g])}">only</button></span>`; }).join('');
-  $('#grOpts').innerHTML = ['1M', '3M', 'YTD', '1Y', '5Y', 'All'].map(r => `<button class="fchip" type="button" data-grrange="${r}" aria-pressed="${GR.range === r && !grWin}">${r}</button>`).join('') + `<span class="seg" role="group" aria-label="Graph style" style="margin-left:4px"><button type="button" data-grmode="stack" aria-pressed="${GR.mode === 'stack'}">Stacked</button><button type="button" data-grmode="lines" aria-pressed="${GR.mode === 'lines'}">Lines</button></span>`;
+  const pm = pctMode();
+  $('#grOpts').innerHTML = GR_RANGES.map(r => `<button class="fchip" type="button" data-grrange="${r}" aria-pressed="${GR.range === r && !grWin}">${r}</button>`).join('') + `<span class="seg" role="group" aria-label="Graph style" style="margin-left:4px"><button type="button" data-grmode="stack" aria-pressed="${GR.mode === 'stack' && !pm}"${pm ? ' disabled title="In % mode the lines are shown"' : ''}>Stacked</button><button type="button" data-grmode="lines" aria-pressed="${GR.mode === 'lines' || pm}">Lines</button></span>`
+    + (E ? `<button class="fchip" type="button" data-grstatic="1" aria-pressed="${GR.inclStatic}" aria-label="Include pension, funds, real estate and cash in the estimated part, flat at today's value">Include static (flat)</button>` : '');
   const days = grDays(), n = days.length;
   if (n > 2) {
     const [a, b] = grWindow(days);
@@ -1452,54 +1679,83 @@ function renderGrowthControls() {
     $('#grA').addEventListener('input', onSlide); $('#grB').addEventListener('input', onSlide);
   } else $('#grSlider').innerHTML = '';
 }
+const dayNum = d => Date.parse(d + 'T12:00:00Z') / 86400000;
+const numDay = v => new Date(Math.round(v) * 86400000).toISOString().slice(0, 10);
+function grFallback(msg) {
+  destroyChart('growth');
+  $('#grBox').innerHTML = `<div class="chart-fallback" style="text-align:center;padding:0 18px;line-height:1.5">${msg}</div>`;
+  $('#grMarks').innerHTML = ''; $('#grNote').innerHTML = ''; $('#grSub').textContent = '';
+}
 function growthChart() {
-  const box = $('#grBox'), G = D && D.growth, S = G ? G.snapshots : [], c = cur();
-  if (!G || S.length < 2) {
-    destroyChart('growth');
+  const box = $('#grBox'), G = D && D.growth, c = cur(), P = pctMode(), Sr = grSeries(), S = G ? G.snapshots || [] : [], EST = G && G.estimate;
+  if (!G || !Sr || Sr.days.length < 2) {
     const start = (G && G.start) || (NW() && NW().ledgerUpdated) || todayLocal();
-    box.innerHTML = `<div class="chart-fallback" style="text-align:center;padding:0 18px;line-height:1.5">📈 The graph starts filling from ${esc(fmtDay(start))}.<br>One point is added every night${S.length ? ' (1 so far)' : ''}; the line appears from the second.</div>`;
-    $('#grMarks').innerHTML = ''; $('#grNote').innerHTML = ''; $('#grSub').textContent = ''; return;
+    return grFallback(`📈 The graph starts filling from ${esc(fmtDay(start))}.<br>One point is added every night${S.length ? ' (1 so far)' : ''}; the line appears from the second.`);
   }
+  const days = Sr.days, [a0, b] = grWindow(days);
+  let sel = NG.filter(g => GR.groups.includes(g)), a = a0, marketOnly = false;
+  const mk = sel.filter(g => MARKET.includes(g)), hasEst = Sr.est.slice(a, b + 1).some(Boolean);
+  if (hasEst && !mk.length && !GR.inclStatic) {
+    // Only static groups picked: they have no estimated past; the graph starts at the first real day.
+    a = Sr.est.findIndex((e, i) => i >= a0 && !e);
+    if (a < 0 || a >= b) return grFallback('The groups you picked have no history yet (the estimate covers stocks, funds and coins). Pick a market group, or tap “Include static (flat)”.');
+  } else if (hasEst && !GR.inclStatic && sel.length > mk.length) { sel = mk; marketOnly = true; }
   if (!$('#ch-growth')) box.innerHTML = '<canvas id="ch-growth" role="img" aria-label="Net worth over time, by group, with money in and out marks"></canvas>';
-  const days = S.map(s => s.date), [a, b] = grWindow(days), dd = days.slice(a, b + 1);
-  let fx = null; const fxs = S.map(s => { if (isNum(s.fx)) fx = s.fx; return fx; }), fx0 = fxs.find(isNum) || fxNow();
-  const k = i => (c === 'ILS' ? (fxs[i] || fx0) : 1);
-  const sel = NG.filter(g => GR.groups.includes(g));
-  const per = sel.map(g => dd.map((_, j) => { const v = S[a + j].usd[g]; return isNum(v) ? r2(v * k(a + j)) : 0; }));
-  const total = dd.map((_, j) => r2(per.reduce((s, arr) => s + (arr[j] || 0), 0)));
+  const dd = days.slice(a, b + 1), E = Sr.est.slice(a, b + 1), xs = dd.map(dayNum);
+  const k = j => (c === 'ILS' ? (Sr.fx[a + j] || fxNow() || 1) : 1);
+  const lines = P || GR.mode === 'lines';
+  const per = sel.map(g => dd.map((_, j) => { const v = Sr.usd[g][a + j]; return isNum(v) ? r2(v * k(j)) : (E[j] && lines ? null : 0); }));
+  const total = dd.map((_, j) => { let t = 0, any = false; per.forEach(arr => { if (isNum(arr[j])) { t += arr[j]; any = true; } }); return any ? r2(t) : null; });
   const flows = (G.flows || []).filter(f => sel.includes(f.group) && f.date >= dd[0] && f.date <= dd[dd.length - 1]).map(f => { let j = dd.findIndex(d => d >= f.date); if (j < 0) j = dd.length - 1; return { f, j, amt: flowAmt(f, c) }; }).filter(x => isNum(x.amt));
   grFlowsShown = flows;
   const nd = withoutFlows(dd, total, flows.filter(x => !x.f.suggested).map(x => ({ date: x.f.date, amount: x.amt })));
+  const base = total.find(v => isNum(v) && v !== 0);
+  const show = P ? { total: rebase(total, base), nd: rebase(nd, base), per: per.map(arr => { const i0 = arr.findIndex(v => isNum(v) && v !== 0); return rebase(arr, arr[i0]).map((v, j) => (j < i0 ? null : v)); }) } : { total, nd, per };
+  const pts = arr => xs.map((x, j) => ({ x, y: arr[j] }));
+  const seg = col => ({ borderDash: t => (E[t.p0DataIndex] ? [4, 3] : undefined), borderColor: t => (E[t.p0DataIndex] ? alpha(col, 0.5) : undefined), backgroundColor: t => (E[t.p0DataIndex] ? alpha(col, 0.12) : undefined) });
   const ds = [];
-  if (GR.mode === 'stack') sel.forEach((g, i) => { const col = tok(NG_COLOR[g]); ds.push({ label: NG_LABEL[g], data: per[i], borderColor: col, backgroundColor: alpha(col, 0.3), fill: i === 0 ? 'origin' : '-1', stack: 'groups', borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 3, tension: 0.2 }); });
+  if (!lines) sel.forEach((g, i) => { const col = tok(NG_COLOR[g]); ds.push({ label: NG_LABEL[g], data: pts(show.per[i]), borderColor: col, backgroundColor: alpha(col, 0.3), fill: i === 0 ? 'origin' : '-1', stack: 'groups', borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 3, tension: 0.2, segment: seg(col) }); });
   else {
-    ds.push(lineDs(sel.length === NG.length ? 'Total' : 'Selected total', total, tok('ink'), { stack: 'total', borderWidth: 2.4 }));
-    if (sel.length > 1) sel.forEach((g, i) => ds.push(lineDs(NG_LABEL[g], per[i], tok(NG_COLOR[g]), { stack: 'g-' + g, borderWidth: 1.4, pointRadius: 0 })));
+    const ink = tok('ink');
+    ds.push(lineDs(sel.length === NG.length ? 'Total' : marketOnly ? 'Markets' : 'Selected total', pts(show.total), ink, { stack: 'total', borderWidth: 2.4, pointRadius: 0, segment: seg(ink) }));
+    if (sel.length > 1) sel.forEach((g, i) => { const col = tok(NG_COLOR[g]); ds.push(lineDs(NG_LABEL[g], pts(show.per[i]), col, { stack: 'g-' + g, borderWidth: 1.4, pointRadius: 0, segment: seg(col) })); });
   }
-  ds.push({ label: 'Without deposits', data: nd, borderColor: tok('ink'), backgroundColor: tok('ink'), borderDash: [5, 4], borderWidth: 1.6, pointRadius: 0, pointHoverRadius: 3, fill: false, stack: 'nd', tension: 0.2 });
-  const mi = ds.length;
-  ds.push({ label: 'Money in / out', type: 'line', showLine: false, stack: 'marks', fill: false, data: flows.map(x => ({ x: dd[x.j], y: total[x.j] })), pointStyle: 'triangle', pointRotation: flows.map(x => (x.amt >= 0 ? 0 : 180)), pointRadius: 8, pointHoverRadius: 10, pointHitRadius: 16,
-    pointBackgroundColor: flows.map(x => (x.f.suggested ? tok('surface') : tok(x.amt >= 0 ? 'good' : 'bad'))), pointBorderColor: flows.map(x => tok(x.amt >= 0 ? 'good' : 'bad')), pointBorderWidth: 2 });
+  const inkc = tok('ink');
+  ds.push({ label: 'Without deposits', data: pts(show.nd), borderColor: inkc, backgroundColor: inkc, borderDash: [5, 4], borderWidth: 1.6, pointRadius: 0, pointHoverRadius: 3, fill: false, stack: 'nd', tension: 0.2, segment: { borderColor: t => (E[t.p0DataIndex] ? alpha(inkc, 0.45) : undefined) } });
+  const mi = ds.length, at = dd.map(() => null);
+  flows.forEach(x => { at[x.j] = x; });
+  ds.push({ label: 'Money in / out', type: 'line', showLine: false, stack: 'marks', fill: false, data: xs.map((x, j) => ({ x, y: at[j] ? show.total[j] : null })), pointStyle: 'triangle', pointRotation: at.map(x => (x && x.amt < 0 ? 180 : 0)), pointRadius: at.map(x => (x ? 8 : 0)), pointHoverRadius: at.map(x => (x ? 10 : 0)), pointHitRadius: at.map(x => (x ? 16 : 0)),
+    pointBackgroundColor: at.map(x => (!x ? 'transparent' : x.f.suggested ? tok('surface') : tok(x.amt >= 0 ? 'good' : 'bad'))), pointBorderColor: at.map(x => (!x ? 'transparent' : tok(x.amt >= 0 ? 'good' : 'bad'))), pointBorderWidth: 2 });
   const o = baseOpts();
   o.plugins.legend.display = false;
-  o.scales.y.stacked = GR.mode === 'stack';
+  o.scales.y.stacked = !lines;
   const span = dayDiff(dd[0], dd[dd.length - 1]);
-  o.scales.x.ticks.callback = v => { const d = dd[v]; if (!d) return ''; const t = String(fmtDay(d)).split(' '); return span > 330 ? t[1] + ' ' + t[2] : t[0] + ' ' + t[1]; };
+  o.scales.x.type = 'linear'; o.scales.x.min = xs[0]; o.scales.x.max = xs[xs.length - 1];
+  o.scales.x.ticks.callback = v => { const t = String(fmtDay(numDay(v))).split(' '); return span > 330 ? t[1] + ' ' + t[2] : t[0] + ' ' + t[1]; };
   o.scales.x.ticks.maxTicksLimit = innerWidth < 600 ? 4 : 7;
-  o.scales.y.ticks.callback = v => (Math.abs(v) >= 1e6 ? sym(c) + (v / 1e6).toFixed(Math.abs(v) >= 1e7 ? 0 : 1) + 'M' : sym(c) + Math.round(v / 1000) + 'k');
-  o.plugins.tooltip.filter = it => it.datasetIndex !== mi;
+  o.scales.y.ticks.callback = P ? v => (v > 0 ? '+' : '') + Math.round(v) + '%' : v => (Math.abs(v) >= 1e6 ? sym(c) + (v / 1e6).toFixed(Math.abs(v) >= 1e7 ? 0 : 1) + 'M' : sym(c) + Math.round(v / 1000) + 'k');
+  const val = v => (P ? pct(v, 1) : fmtC(v, c));
+  o.plugins.tooltip.filter = it => it.datasetIndex !== mi && it.parsed.y != null;
   o.plugins.tooltip.callbacks = {
-    title: items => (items[0] ? fmtDay(dd[items[0].dataIndex]) : ''),
-    label: t => ' ' + t.dataset.label + ': ' + fmtC(t.parsed.y, c),
-    footer: items => { if (!items[0]) return ''; const j = items[0].dataIndex, hits = flows.filter(x => x.j === j); return (GR.mode === 'stack' ? 'Total ' + fmtC(total[j], c) : '') + hits.map(x => '\n' + (x.amt >= 0 ? '▲ in ' : '▼ out ') + fmtC(x.amt, c) + (x.f.suggested ? ' (suggested)' : '')).join(''); }
+    title: items => (items[0] ? fmtDay(dd[items[0].dataIndex]) + (E[items[0].dataIndex] ? ' · est.' : '') : ''),
+    label: t => ' ' + t.dataset.label + ': ' + val(t.parsed.y),
+    footer: items => { if (!items[0]) return ''; const j = items[0].dataIndex, x = at[j]; return (!lines ? 'Total ' + val(show.total[j]) : '') + (x ? '\n' + (x.amt >= 0 ? '▲ in ' : '▼ out ') + fmtC(x.amt, c) + (x.f.suggested ? ' (suggested)' : '') : ''); }
   };
-  o.onClick = (evt, _els, chart) => { const hit = chart.getElementsAtEventForMode(evt, 'point', { intersect: true }, false).find(e => e.datasetIndex === mi); if (hit && flows[hit.index]) openFlow(flows[hit.index].f.id); };
-  mkChart('growth', $('#ch-growth'), { type: 'line', data: { labels: dd, datasets: ds }, options: o });
-  const first = total[0], last = total[total.length - 1], g = isNum(first) && first ? (last / first - 1) * 100 : null, ndg = isNum(first) && first && isNum(nd[nd.length - 1]) ? (nd[nd.length - 1] / first - 1) * 100 : null;
-  $('#grSub').innerHTML = `<span class="num">${fmtC(last, c)}</span> · <span class="${cls(g)}">${pct(g)}</span> · without deposits <span class="${cls(ndg)}">${pct(ndg)}</span>`;
+  o.onClick = (evt, _els, chart) => { const hit = chart.getElementsAtEventForMode(evt, 'point', { intersect: true }, false).find(e => e.datasetIndex === mi); if (hit && at[hit.index]) openFlow(at[hit.index].f.id); };
+  mkChart('growth', $('#ch-growth'), { type: 'line', data: { datasets: ds }, options: o });
+  const first = total.find(isNum), last = total[total.length - 1], g = isNum(first) && first ? (last / first - 1) * 100 : null, ndg = isNum(first) && first && isNum(nd[nd.length - 1]) ? (nd[nd.length - 1] / first - 1) * 100 : null;
+  $('#grSub').innerHTML = `${P ? '' : `<span class="num">${fmtC(last, c)}</span> · `}<span class="${cls(g)}">${pct(g)}</span>${E[0] ? ' <span class="muted">est.</span>' : ''} · without deposits <span class="${cls(ndg)}">${pct(ndg)}</span>`;
   $('#grMarks').innerHTML = flows.slice(-8).reverse().map(x => `<button class="mark ${x.amt >= 0 ? 'in' : 'out'} ${x.f.suggested ? 'sugg' : ''}" type="button" data-flow="${esc(x.f.id)}"><span class="tri" aria-hidden="true">${x.f.suggested ? (x.amt >= 0 ? '△' : '▽') : x.amt >= 0 ? '▲' : '▼'}</span><span class="num">${x.amt >= 0 ? '+' : ''}${fmtC(x.amt, c)}</span><span class="muted">${shortDay(x.f.date)} · ${esc(NG_LABEL[x.f.group])}${x.f.suggested ? ' · suggested' : ''}</span></button>`).join('');
-  const legend = (GR.mode === 'stack' ? sel.map(g => `<span><i class="sw" style="background:var(--${NG_COLOR[g]})"></i>${esc(NG_LABEL[g])}</span>`) : [`<span><i class="sw" style="background:var(--ink)"></i>${sel.length === NG.length ? 'Total' : 'Selected total'}</span>`, ...(sel.length > 1 ? sel.map(g => `<span><i class="sw" style="background:var(--${NG_COLOR[g]})"></i>${esc(NG_LABEL[g])}</span>`) : [])]).join('') + '<span>┄ without deposits</span>';
-  $('#grNote').innerHTML = `<span class="legend-inline" style="margin-bottom:6px">${legend}</span><b>▲</b> money in, <b>▼</b> out (hollow = suggested, not yet confirmed). Dashed line: <b>growth without deposits</b> = the value minus the money put in (plus what was taken out) since the first day shown. <button class="linkbtn" type="button" data-grinfo="1">How it is counted</button>`;
+  const legend = (!lines ? sel.map(g => `<span><i class="sw" style="background:var(--${NG_COLOR[g]})"></i>${esc(NG_LABEL[g])}</span>`) : [`<span><i class="sw" style="background:var(--ink)"></i>${sel.length === NG.length ? 'Total' : marketOnly ? 'Markets' : 'Selected total'}</span>`, ...(sel.length > 1 ? sel.map(g => `<span><i class="sw" style="background:var(--${NG_COLOR[g]})"></i>${esc(NG_LABEL[g])}</span>`) : [])]).join('') + '<span>┄ without deposits</span>';
+  const pctNote = P ? ' In %: every line starts at 0% on the first day shown (each group from its own first value; "without deposits" from the total\'s).' : '';
+  $('#grNote').innerHTML = `<span class="legend-inline" style="margin-bottom:6px">${legend}</span><b>▲</b> money in, <b>▼</b> out (hollow = suggested, not yet confirmed). Dashed line: <b>growth without deposits</b> = the value minus the money put in (plus what was taken out) since the first day shown.${pctNote} <button class="linkbtn" type="button" data-grinfo="1">How it is counted</button>`
+    + (EST && hasEst ? estNote(EST, S, marketOnly) : '');
+}
+/* The estimated part's note: what it is, how many holdings had real dates, what is left out. */
+function estNote(EST, S, marketOnly) {
+  const C = EST.coverage || {}, upto = S.length ? fmtDay(S[0].date) : 'today', n = v => (isNum(v) ? v : 0);
+  const dates = `${n(C.dated)} with real dates (bought day or dated lots), ${n(C.partly)} partly dated, ${n(C.assumed)} with no date (assumed held the whole time)`;
+  return `<p class="note est-note"><b>Faded, dashed part = ${esc(EST.label || 'estimated')}</b>, before ${esc(upto)}: today's quantities × each day's close${isNum(EST.fx) ? ', at today\'s USD/ILS ' + EST.fx.toFixed(3) : ''}; real snapshots replace it from their first day. Holdings: ${dates}.${n(C.closed) ? ' ' + n(C.closed) + ' closed position(s) counted between their buy and sell days.' : ''}${n(C.callsAtCost) ? ' Calls: flat at their cost from their buy day.' : ''}${C.noHistory && C.noHistory.length ? ' No price history, drawn flat at today\'s value: ' + esc(C.noHistory.join(', ')).replace(/\.$/, '') + '.' : ''} ${marketOnly ? '<b>Markets only</b> while estimated days are shown; tap “Include static (flat)” to add pension, funds, property and cash at today\'s value.' : GR.inclStatic ? 'Pension, funds, property and cash are drawn flat at today\'s value on estimated days.' : ''}</p>`;
 }
 function openGrowthInfo() {
   openSheet('Growth without deposits', `<p>The dashed line is the value of the groups you picked <b>minus the net money you put in</b> since the first day on the graph:</p>
@@ -1716,12 +1972,14 @@ function doEdit(what, el) {
 }
 
 /* ---------- events ---------- */
-function renderView(v) { ({ pf: renderPortfolio, ex: renderExit, buy: renderBuy, pp: renderPaper, hi: renderHistory, run: renderRuns, idea: renderIdeas }[v] || (() => {}))(); }
+function renderView(v) { ({ pf: renderPortfolio, ex: renderExit, buy: renderBuy, pp: renderPaper, hi: renderHistory, run: renderRuns, idea: renderIdeas, jr: renderJournal }[v] || (() => {}))(); }
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-hold],[data-acct],[data-run],[data-analyze],[data-fv],[data-close],[data-week],[data-hist],[data-sort],[data-sortdir],[data-goanalyze],[data-gomodels],[data-goideas],[data-nwcur],[data-nwg],[data-nwitem],[data-edit],[data-flow],[data-grall],[data-grg],[data-gronly],[data-grrange],[data-grmode],[data-grinfo],[data-nwpie],[data-stpie]');
+  const el = e.target.closest('[data-hold],[data-acct],[data-run],[data-analyze],[data-fv],[data-close],[data-week],[data-hist],[data-sort],[data-sortdir],[data-goanalyze],[data-gomodels],[data-goideas],[data-nwcur],[data-nwrange],[data-grstatic],[data-nwg],[data-nwitem],[data-edit],[data-flow],[data-grall],[data-grg],[data-gronly],[data-grrange],[data-grmode],[data-grinfo],[data-nwpie],[data-stpie]');
   if (!el || el.tagName === 'SELECT') return;
   if (el.dataset.edit) doEdit(el.dataset.edit, el);
-  else if (el.dataset.nwcur) { nwCur = el.dataset.nwcur; store.set('nw-cur', nwCur); renderNetworth(); if (current === 'networth') renderCharts(); }
+  else if (el.dataset.nwcur) { nwCur = el.dataset.nwcur; if (nwCur !== 'PCT') { nwMoney = nwCur; store.set('nw-money', nwMoney); } store.set('nw-cur', nwCur); renderNetworth(); if (current === 'networth') renderCharts(); }
+  else if (el.dataset.nwrange) { nwRange = el.dataset.nwrange; store.set('nw-range', nwRange); renderNetworth(); }
+  else if (el.dataset.grstatic) { GR.inclStatic = !GR.inclStatic; saveGR(); renderGrowthControls(); growthChart(); }
   else if (el.dataset.nwg) { const g = el.dataset.nwg; nwOpen.has(g) ? nwOpen.delete(g) : nwOpen.add(g); store.set('nw-open', [...nwOpen]); renderNetworth(); }
   else if (el.dataset.nwitem != null) openNwItem(+el.dataset.nwitem);
   else if (el.dataset.flow) openFlow(el.dataset.flow);
@@ -1778,20 +2036,24 @@ $('#anForm').addEventListener('submit', e => { e.preventDefault(); const v = $('
 window.addEventListener('hashchange', route);
 
 /* ---------- boot ---------- */
-if (window.Chart) { Chart.defaults.font.family = "'IBM Plex Sans', system-ui, sans-serif"; }
+if (typeof window.Chart === 'function') { try { Chart.defaults.font.family = "'IBM Plex Sans', system-ui, sans-serif"; } catch (e) { /* defaults stay */ } }
 buildNav();
 function renderAll() {
-  nwRecalc(); renderStatus(); renderAsOf(); renderNetworth(); renderOverview(); renderPortfolio(); renderExit(); renderBuy(); renderPaper(); renderIdeas(); renderHistory();
-  renderAnalyze(); renderOptions(); renderModels(); renderRuns(); renderActions(); renderSettings();
+  /* Each section on its own: one section's error must not leave the others (or the tabs) empty. */
+  [['net worth', nwRecalc, '#view-networth'], ['status', renderStatus], ['as of', renderAsOf], ['net worth', renderNetworth, '#view-networth'], ['overview', renderOverview, '#view-overview'],
+    ['portfolio', renderPortfolio, '#view-portfolio'], ['exit', renderExit, '#view-exit'], ['buy', renderBuy, '#view-buy'], ['paper', renderPaper, '#view-paper'], ['ideas', renderIdeas, '#ideasCard'],
+    ['history', renderHistory, '#view-history'], ['journal', renderJournal, '#view-journal'], ['analyze', () => renderAnalyze(), '#view-analyze'], ['options', renderOptions, '#view-options'], ['models', renderModels, '#view-models'],
+    ['runs', renderRuns, '#view-runs'], ['actions', renderActions, '#view-actions'], ['settings', renderSettings, '#view-settings']].forEach(([n, f, w]) => safely(n, f, w));
 }
 fetch('./data/dashboard.json', { cache: 'no-store', credentials: 'same-origin' })
   .then(r => { if (!r.ok) throw new Error('status ' + r.status); return r.json(); })
-  .then(j => { D = j; D.user = D.user || { labels: {}, list: [] }; renderAll(); route(); if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => renderCharts()); })
+  .then(j => { D = j; D.user = D.user || { labels: {}, list: [] }; renderAll(); safely('route', route); if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => renderCharts()); })
   .catch(err => {
+    if (D) { console.error('dashboard: render failed after the data loaded:', err); return; }
     $('#asof').className = 'asof stale'; $('#asof').innerHTML = '<span>The data could not be loaded (' + esc(err.message) + '). Pull to refresh, or sign in again.</span>';
     $('#statusText').textContent = 'No data'; route();
   });
 </script>
-<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});</script>
+<script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});</script>
 </body>
 </html>

@@ -486,6 +486,18 @@ export function reportRows(r: Report): (string | number)[][] {
   return r.rows.map((x) => [date, x.job, x.expected || '—', x.ran, x.icon + ' ' + (x.result || 'ok'), x.minutes, x.warnings, x.errors, x.topProblem.slice(0, 300), x.link]);
 }
 
+/**
+ * Fix 2026-11-08: the watchdog runs more than once a day (timer + manual), and each run appended the same day's rows
+ * again. A row whose date, job, expected and run link are already on the tab is not appended twice.
+ */
+export function newRunHealthRows(existing: readonly (readonly unknown[])[], rows: readonly (readonly (string | number)[])[]): (readonly (string | number)[])[] {
+  const key = (r: readonly unknown[]): string => [0, 1, 2, 9].map((i) => String(r[i] ?? '').trim()).join('|');
+  const seen = new Set(existing.map(key));
+  const out: (readonly (string | number)[])[] = [];
+  for (const r of rows) { const k = key(r); if (!seen.has(k)) { seen.add(k); out.push(r); } }
+  return out;
+}
+
 /** The default sheet writer: '🩺 Run Health' in the reports spreadsheet (My Portfolio before the split), created when missing. */
 export async function appendToReportsSheet(env: Readonly<Record<string, string | undefined>>, rows: readonly (readonly (string | number)[])[]): Promise<number> {
   const json = (env.GOOGLE_SERVICE_ACCOUNT_JSON ?? '').trim();
@@ -503,7 +515,11 @@ export async function appendToReportsSheet(env: Readonly<Record<string, string |
     const added = await c.addTabs(ctx, [RUN_HEALTH_TAB]);
     if (!added.ok) throw new Error('the ' + RUN_HEALTH_TAB + ' tab could not be created');
     out = [RUN_HEALTH_HEADER, ...rows];
+  } else {
+    const have = await c.batchGet(ctx, [a1(RUN_HEALTH_TAB, 'A:J')]);
+    if (have.ok) out = newRunHealthRows(have.value[0] ?? [], rows);
   }
+  if (!out.length) return 0;
   const res = await c.append(ctx, a1(RUN_HEALTH_TAB, 'A1'), out.map((r) => [...r]));
   if (!res.ok) throw new Error('the rows could not be appended');
   return out.length;

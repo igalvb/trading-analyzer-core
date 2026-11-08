@@ -12,6 +12,7 @@
  *   ledger/edits.jsonl        LedgerEdit       every edit made in the dashboard (audit trail), append-only
  *   ledger/targets.json       LedgerTargets    optional: values the owner typed for himself (additive 2026-11-06)
  *   ledger/prices.json        LedgerPrices     optional: the Nightly's own prices of the night (additive 2026-11-06)
+ *   ledger/journal.jsonl      LedgerJournalEntry  the advice journal: every advice given, one line each (additive 2026-11-08)
  *
  * Money: `currency` per item ('USD' | 'ILS'); totals are converted with the day's USD/ILS rate (`fxUsdIls` in a
  * snapshot). Dates are 'YYYY-MM-DD' (New York date for market data, the owner's date for his own entries).
@@ -231,7 +232,44 @@ export const LEDGER_FILES = {
   targets: LEDGER_DIR + '/targets.json',
   /** Optional (additive 2026-11-06): written by the Nightly. */
   prices: LEDGER_DIR + '/prices.json',
+  /** Optional (additive 2026-11-08): the advice journal (ledger/journal.ts), append-only. */
+  journal: LEDGER_DIR + '/journal.jsonl',
 } as const;
+
+/**
+ * Additive (2026-11-08), optional file ledger/journal.jsonl: the advice journal (ledger/journal.ts, docs/LEDGER.md
+ * "The advice journal"). One line per NEW or CHANGED piece of advice the system or Claude gave, append-only, so it can
+ * be scored a year later. Whether the owner acted on it and whether it was right are NOT stored: the dashboard computes
+ * both at each build (from edits.jsonl / holdings.json and the price history).
+ */
+export const JOURNAL_SOURCES = ['exit', 'buy', 'washout', 'marketShock', 'business', 'eventCheck', 'claudeIdea', 'claudeChat', 'top5'] as const;
+export type JournalSource = (typeof JOURNAL_SOURCES)[number];
+export const JOURNAL_ADVICE = ['BUY', 'ADD', 'HOLD', 'REVIEW', 'EXIT', 'WAIT', 'AVOID', 'BUY_POINT', 'ALERT'] as const;
+export type JournalAdvice = (typeof JOURNAL_ADVICE)[number];
+
+export interface LedgerJournalEntry {
+  readonly schema: number;
+  /** Stable: date, source, subject and advice (ledger/journal.ts journalId); a second line with the same id is refused. */
+  readonly id: string;
+  /** 'YYYY-MM-DD', New York: the day the advice was given. */
+  readonly date: string;
+  readonly source: JournalSource;
+  /** null = the whole market (a market shock, a market event check). */
+  readonly ticker: string | null;
+  readonly advice: JournalAdvice;
+  /** The short reason, as the report or Claude gave it. */
+  readonly detail: string;
+  /** The stock's price when the advice was given (an option: its underlying); null = not known (the history's close that day is used). */
+  readonly priceAtAdvice: number | null;
+  /** QQQ's price then; null = not known (the history's close that day is used). */
+  readonly qqqAtAdvice: number | null;
+  /** The horizon the advice names, as written ("6-12 months", "until 17 Nov earnings"); '' = none named. */
+  readonly horizon: string;
+  /** Where it came from: the holding's label, the entry zone, the report's run time, an alert's signature... */
+  readonly refs?: Readonly<Record<string, string | number | null>>;
+  /** When the line was written (ISO). */
+  readonly at?: string;
+}
 
 /** The group of a holding (net-worth screen, filters, snapshots). */
 export function groupOfStock(s: Pick<LedgerStock, 'kind'>): LedgerGroup {

@@ -48,7 +48,8 @@
     "claude-idea": "node --env-file-if-exists=.env src/claudeIdea.ts",
     "dashboard-build": "TZ=America/New_York node --env-file-if-exists=.env src/dashboardBuild.ts",
     "ledger-migrate": "TZ=America/New_York node --env-file-if-exists=.env src/ledgerMigrate.ts",
-    "ledger-history": "TZ=America/New_York node --env-file-if-exists=.env src/ledgerHistory.ts"
+    "ledger-history": "TZ=America/New_York node --env-file-if-exists=.env src/ledgerHistory.ts",
+    "journal-add": "TZ=America/New_York node src/journalAdd.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

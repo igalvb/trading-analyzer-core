@@ -86,7 +86,7 @@ import { activeProfile } from '../profile/active.ts';
 import { PAPER_OWNER_LIST } from '../paper/paperLab.ts';
 import { OPTIONS_READ_APPLIED, seedOptionsWorkbook, shadowLine } from '../analysis/options/nightlyRead.ts';
 import { runFundamentalsHistoryNight, FUNDAMENTALS_HISTORY_TAB, FUNDAMENTALS_HISTORY_HEADER } from '../storage/fundamentalsHistory.ts';
-import { runBusinessAlerts } from '../jobs/exit/businessAlerts.ts';
+import { runBusinessAlerts, type BusinessAlertsResult } from '../jobs/exit/businessAlerts.ts';
 import type { ExitPipelineResult } from '../jobs/exit/exitPipeline.ts';
 import { formatDateInTz } from '../core/dates.ts';
 import { orElseAsync } from '../core/guard.ts';
@@ -125,6 +125,8 @@ export interface NightlyApp {
   readonly washout: () => Promise<WashoutNight | null>;
   /** Tonight's event check (memoised; null when profile alerts.eventCheck is off, on a quiet night, or the read failed). */
   readonly eventCheck: () => Promise<EventNight | null>;
+  /** Tonight's business alerts (profile exit.businessAlerts shadow / on), once the Exit report step built them; null before or when off. For the advice journal (display only). */
+  readonly business?: () => BusinessAlertsResult | null;
 }
 
 const NIGHTLY_TICKER_TIMEOUT_MS = 10 * 60_000;
@@ -269,6 +271,7 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
     return washoutMemo;
   };
   const bizMode = activeProfile().exit.businessAlerts;
+  let bizResult: BusinessAlertsResult | null = null;
 
   const jobs: NightlyDeps['jobs'] = {
     // F-N1: the same computations as jobs/darkPool.ts, without the swallowing try/catch.
@@ -425,6 +428,7 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
             getChart, kv: s.kv, log: c.log.child('exit.businessAlerts'),
             telegram: token && chatId ? { deps: { token }, chatId } : null,
           });
+          bizResult = r.result;
           return r.view;
         },
       } : {}),
@@ -471,7 +475,7 @@ export async function buildNightlyApp(s: Services, o: NightlyAppOptions = {}): P
     ...(o.concurrency ? { concurrency: o.concurrency } : {}),
     ...(o.skip ? { skip: o.skip } : {}),
   };
-  return { deps, options, cache, portfolio, watchlist: wl.tickers, digest, washout, eventCheck };
+  return { deps, options, cache, portfolio, watchlist: wl.tickers, digest, washout, eventCheck, business: () => bizResult };
 }
 
 /** The promise's value when it settles within `ms`; null when it rejects or is still pending. */

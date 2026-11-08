@@ -2,7 +2,8 @@
  * The dashboard site folder (docs/DASHBOARD.md): the static app shell in backend/dashboard/ (copied as it is, never
  * generated), the data file, and two app icons drawn here as PNG (iOS "Add to Home Screen" wants a PNG touch icon).
  *
- *   <out>/index.html, manifest.webmanifest, icon.svg, _headers   copied from backend/dashboard/
+ *   <out>/index.html, manifest.webmanifest, icon.svg, sw.js, _headers   copied from backend/dashboard/
+ *   <out>/vendor/chart.umd.min.js                                 copied (Chart.js 4.4.1, MIT; self-hosted: no CDN script)
  *   <out>/functions/api/run.js, edit.js                          copied (the Cloudflare Pages Functions: Run buttons, ledger edits)
  *   <out>/data/dashboard.json                                    the data (dashboard/data.ts)
  *   <out>/apple-touch-icon.png (180 px), icon-512.png             drawn by iconPng
@@ -17,7 +18,7 @@ import zlib from 'node:zlib';
 /** The app shell folder, relative to backend/. */
 export const APP_DIR = path.resolve(import.meta.dirname, '..', '..', 'dashboard');
 /** The files copied from APP_DIR (paths relative to it). */
-export const APP_FILES: readonly string[] = ['index.html', 'manifest.webmanifest', 'icon.svg', 'sw.js', '_headers', 'functions/api/run.js', 'functions/api/edit.js'];
+export const APP_FILES: readonly string[] = ['index.html', 'manifest.webmanifest', 'icon.svg', 'sw.js', '_headers', 'vendor/chart.umd.min.js', 'functions/api/run.js', 'functions/api/edit.js'];
 export const DATA_FILE = 'data/dashboard.json';
 
 const crcTable = ((): Uint32Array => {

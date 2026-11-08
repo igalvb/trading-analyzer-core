@@ -215,3 +215,13 @@ describe('watchdog: never fails loudly', () => {
     assert.ok(isAllowListedName(RUN_HEALTH_TAB) && PROTECTED_TABS.includes(RUN_HEALTH_TAB));
   });
 });
+
+describe('Run Health: no duplicate rows (fix 2026-11-08)', () => {
+  test('a row already on the tab (same date, job, expected, link) is not appended again; new ones are', async () => {
+    const { newRunHealthRows } = await import('../src/watchdog.ts');
+    const existing = [['Date', 'Job', 'Expected', 'Ran', 'Result', 'Minutes', 'Warnings', 'Errors', 'Top problem', 'Run link'], ['2026-11-06', 'Nightly', 'yes (2026-11-05)', 1, '⚠️ ok', 10, 12, 6, 'x', 'https://r/1']];
+    const rows = [['2026-11-06', 'Nightly', 'yes (2026-11-05)', 1, '⚠️ ok', 11, 13, 6, 'x', 'https://r/1'], ['2026-11-07', 'Nightly', 'yes (2026-11-06)', 1, '✅ ok', 9, 0, 0, '', 'https://r/2'], ['2026-11-07', 'Nightly', 'yes (2026-11-06)', 1, '✅ ok', 9, 0, 0, '', 'https://r/2']];
+    assert.deepEqual(newRunHealthRows(existing, rows).map((r) => r[0]), ['2026-11-07']);
+  });
+});
+

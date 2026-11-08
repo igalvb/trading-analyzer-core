@@ -87,6 +87,14 @@ jobs:
           ref: data
           path: data-branch
 
+      - name: Check out the long price history (the growth graph's estimated past, docs/DASHBOARD.md; read only; a missing branch is skipped)
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/checkout@v5
+        continue-on-error: true
+        with:
+          ref: prices
+          path: long-history
+
       - name: Set up Node.js
         if: steps.guard.outputs.run == 'true'
         uses: actions/setup-node@v5

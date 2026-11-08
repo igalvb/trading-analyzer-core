@@ -207,7 +207,7 @@ describe('dashboard data', () => {
     const d = buildDashboard({}, CTX);
     assert.equal(d.schema, DASHBOARD_SCHEMA);
     assert.equal(d.asOfText, 'Thu 5 Nov 2026, 23:40 NY');
-    assert.deepEqual(d.missing, ['portfolio', 'exit', 'buy', 'history', 'paper', 'ideas', 'options', 'models', 'decisions', 'runs', 'networth', 'growth']);
+    assert.deepEqual(d.missing, ['portfolio', 'exit', 'buy', 'history', 'paper', 'ideas', 'options', 'models', 'decisions', 'runs', 'networth', 'growth', 'journal']);
     assert.equal(d.user.taxRate, 0.25);
     const junk = buildDashboard({ portfolio: [[null as never, {} as never]], exitReport: [['x']], paperValues: [['nope']], runHealth: [[1, 2, 3]], optionsReads: [['?']] }, CTX);
     assert.ok(junk.missing.includes('portfolio') && junk.missing.includes('paper'));
@@ -250,7 +250,7 @@ describe('dashboard site folder', () => {
     assert.match(headers, /\/data\/\*\n {2}Cache-Control: no-store/);
     assert.match(headers, /X-Frame-Options: DENY/);
     const html = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
-    assert.ok(html.includes('https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js'), 'Chart.js 4.4.1 pinned');
+    assert.ok(html.includes('<script src="vendor/chart.umd.min.js"></script>') && fs.readFileSync(path.join(dir, 'vendor/chart.umd.min.js'), 'utf8').includes('Chart.js v4.4.1'), 'Chart.js 4.4.1 self-hosted');
     assert.ok(html.includes("fetch('./data/dashboard.json'"));
     assert.ok(html.includes('rel="manifest"') && html.includes('apple-touch-icon') && html.includes('name="theme-color"'));
     assert.doesNotMatch(html, /Mockup|SAMPLE/);
